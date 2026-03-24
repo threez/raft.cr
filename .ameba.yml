@@ -1,0 +1,14 @@
+# Specs and benchmarks commonly use not_nil! for concise assertions.
+Lint/NotNil:
+  Excluded:
+    - "spec/**/*.cr"
+    - "bench/**/*.cr"
+    - "examples/**/*.cr"
+
+# The RPC dispatcher and pipelined replicator run loop are intentionally
+# branchy but well-tested; exclude from cyclomatic complexity checks.
+Metrics/CyclomaticComplexity:
+  Excluded:
+    - "src/raft/node.cr"
+    - "src/raft/node/replicator.cr"
+    - "examples/**/*.cr"
