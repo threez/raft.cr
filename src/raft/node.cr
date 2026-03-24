@@ -77,7 +77,7 @@ class Raft::Node
     # Recover state from snapshot and/or log replay
     if snap = @log.load_snapshot
       snap_index, _snap_term, snap_data = snap
-      @state_machine.restore(snap_data)
+      @state_machine.restore(IO::Memory.new(snap_data))
       @last_applied = snap_index
       @commit_index = snap_index
       @last_snapshot_index = snap_index

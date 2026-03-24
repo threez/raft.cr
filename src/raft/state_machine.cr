@@ -15,7 +15,7 @@ module Raft
   #     # serialize entire state
   #   end
   #
-  #   def restore(data : Bytes) : Nil
+  #   def restore(io : IO) : Nil
   #     # replace state from snapshot
   #   end
   # end
@@ -38,6 +38,6 @@ module Raft
     #
     # Called when this node receives a snapshot from the leader because it
     # is too far behind to catch up via normal log replication.
-    abstract def restore(data : Bytes) : Nil
+    abstract def restore(io : IO) : Nil
   end
 end

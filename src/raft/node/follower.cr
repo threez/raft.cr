@@ -82,7 +82,7 @@ module Raft::Node::Follower
       if msg.done?
         snapshot_data = buffer.to_slice.dup
         @snapshot_buffer = nil
-        @state_machine.restore(snapshot_data)
+        @state_machine.restore(IO::Memory.new(snapshot_data))
         @log.save_snapshot(msg.last_included_index, msg.last_included_term, snapshot_data)
         @last_applied = msg.last_included_index if msg.last_included_index > @last_applied
         @commit_index = msg.last_included_index if msg.last_included_index > @commit_index

@@ -26,7 +26,7 @@ class TestStateMachine < Raft::StateMachine
     Bytes.empty
   end
 
-  def restore(data : Bytes) : Nil
+  def restore(io : IO) : Nil
   end
 end
 

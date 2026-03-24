@@ -41,7 +41,7 @@ class MyApp < Raft::StateMachine
     # serialize state
   end
 
-  def restore(data : Bytes) : Nil
+  def restore(io : IO) : Nil
     # restore from snapshot
   end
 end
