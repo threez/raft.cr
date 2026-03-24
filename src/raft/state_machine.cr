@@ -28,6 +28,14 @@ module Raft
     # the command via `Node#propose`.
     abstract def apply(command : Bytes) : Bytes
 
+    # Applies a batch of committed commands and returns their responses in order.
+    #
+    # Override this for bulk optimizations (e.g., a single DB transaction per batch).
+    # The default implementation calls `apply` for each command individually.
+    def apply_batch(commands : Array(Bytes)) : Array(Bytes)
+      commands.map { |cmd| apply(cmd) }
+    end
+
     # Serializes the entire current state for snapshotting.
     #
     # Called when the leader needs to send a snapshot to a lagging follower

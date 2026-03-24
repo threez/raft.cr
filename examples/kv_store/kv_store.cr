@@ -53,7 +53,7 @@ class KVStore < Raft::StateMachine
 
   def restore(io : IO) : Nil
     @data.clear
-    while (key_len = io.read_bytes?(UInt16, IO::ByteFormat::BigEndian))
+    while key_len = io.read_bytes?(UInt16, IO::ByteFormat::BigEndian)
       key = io.read_string(key_len)
       val_len = io.read_bytes(UInt32, IO::ByteFormat::BigEndian)
       value = Bytes.new(val_len)

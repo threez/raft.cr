@@ -333,21 +333,39 @@ class Raft::Node
   end
 
   private def apply_committed_entries : Nil
-    while @last_applied < @commit_index
-      @last_applied += 1
-      entry = @log.get(@last_applied)
-      next unless entry
+    return if @last_applied >= @commit_index
+
+    entries = @log.slice(@last_applied + 1, @commit_index)
+    op_indices = [] of UInt64
+    op_commands = [] of Bytes
+
+    flush = -> {
+      return if op_commands.empty?
+      results = @state_machine.apply_batch(op_commands)
+      if @role.leader?
+        op_indices.each_with_index { |idx, i| resolve_pending(idx, results[i]) }
+      end
+      op_indices.clear
+      op_commands.clear
+    }
+
+    entries.each do |entry|
+      @last_applied = entry.index
       @metrics.entries_applied += 1
       if entry.entry_type.op?
-        result = @state_machine.apply(entry.data)
-        resolve_pending(@last_applied, result) if @role.leader?
-      elsif entry.entry_type.noop? && @role.leader?
-        resolve_pending(@last_applied, Bytes.empty)
+        op_indices << entry.index
+        op_commands << entry.data
+      elsif entry.entry_type.noop?
+        flush.call
+        resolve_pending(entry.index, Bytes.empty) if @role.leader?
       elsif entry.entry_type.config?
+        flush.call
         new_peers = decode_peers(entry.data)
         apply_config(new_peers) unless @role.leader? # leader already applied on propose
       end
     end
+
+    flush.call
 
     # Auto-snapshot when threshold is exceeded
     threshold = @config.snapshot_threshold

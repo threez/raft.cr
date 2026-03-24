@@ -37,6 +37,11 @@ class MyApp < Raft::StateMachine
     # execute command, return result
   end
 
+  # Optional: override for bulk optimizations (e.g. a single DB transaction per batch)
+  def apply_batch(commands : Array(Bytes)) : Array(Bytes)
+    commands.map { |cmd| apply(cmd) }
+  end
+
   def snapshot : Bytes
     # serialize state
   end
