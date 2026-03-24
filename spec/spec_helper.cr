@@ -1,6 +1,15 @@
 require "spec"
 require "../src/raft"
 
+def wait_until(timeout_ms = 2000, &block : -> Bool) : Bool
+  deadline = Time.instant + timeout_ms.milliseconds
+  loop do
+    return true if block.call
+    return false if Time.instant > deadline
+    sleep 10.milliseconds
+  end
+end
+
 class PipeIO < IO
   def initialize(@reader : IO, @writer : IO)
   end

@@ -32,7 +32,7 @@ describe "Raft Integration" do
       config: Raft::Config.new(election_timeout_min: 30, election_timeout_max: 60, heartbeat_interval: 15),
     )
     node.start
-    sleep 200.milliseconds
+    wait_until { node.role.leader? }.should be_true
     node.role.leader?.should be_true
     node.stop
   end
@@ -71,11 +71,9 @@ describe "Raft Integration" do
     end
 
     # Wait for a new leader to be elected among the majority
-    sleep 500.milliseconds
-
-    # The two non-partitioned nodes should elect a new leader
     non_partitioned = cluster.nodes.reject { |node| node.id == leader_id }
-    new_leader = non_partitioned.find(&.role.leader?)
+    new_leader = nil
+    wait_until { (new_leader = non_partitioned.find(&.role.leader?)) != nil }
     new_leader.should_not be_nil
 
     cluster.stop
@@ -113,10 +111,9 @@ describe "Raft Integration" do
       next if node.id == follower_id
       Raft::Transport::InMemory.heal(follower_id, node.id)
     end
-    sleep 300.milliseconds
-
     # Original leader should still be leader (not disrupted)
-    remaining_leader = cluster.nodes.find(&.role.leader?)
+    remaining_leader = nil
+    wait_until { (remaining_leader = cluster.nodes.find(&.role.leader?)) != nil }
     remaining_leader.should_not be_nil
 
     cluster.stop
@@ -191,9 +188,9 @@ describe "Raft Integration" do
 
     # Leader adds the new peer
     leader.add_peer("node-4")
-    sleep 300.milliseconds
 
     # Verify the new node receives heartbeats (it should know the leader)
+    wait_until { new_node.leader != nil }.should be_true
     new_node.leader.should_not be_nil
 
     new_node.stop
