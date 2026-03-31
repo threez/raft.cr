@@ -51,16 +51,29 @@ class Raft::Log::InMemory < Raft::Log
   end
 
   def slice(from : UInt64, to : UInt64) : Array(Entry)
-    result = Array(Entry).new
     from_pos = from.to_i - 1
     to_pos = to.to_i - 1
-    return result if from_pos < 0
+    return Array(Entry).new if from_pos < 0
 
+    cap = {to_pos - from_pos + 1, @entries.size - from_pos}.min
+    cap = 0 if cap < 0
+    result = Array(Entry).new(cap)
     from_pos.upto(to_pos) do |idx|
       break if idx >= @entries.size
       result << @entries[idx] if idx >= 0
     end
     result
+  end
+
+  def each_in_range(from : UInt64, to : UInt64, & : Entry ->) : Nil
+    from_pos = from.to_i - 1
+    to_pos = to.to_i - 1
+    return if from_pos < 0
+
+    from_pos.upto(to_pos) do |idx|
+      break if idx >= @entries.size
+      yield @entries[idx] if idx >= 0
+    end
   end
 
   def save_metadata(meta : Metadata) : Nil

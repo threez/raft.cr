@@ -80,16 +80,18 @@ module Raft::Node::Leader
   end
 
   private def advance_commit_index : Nil
-    new_commit = @commit_index
-    ((@commit_index + 1)..@log.last_index).reverse_each do |idx|
-      count = @match_index.count { |_, match| match >= idx } + 1 # +1 for self
-      if count >= quorum_size && @log.term_at(idx) == @current_term
-        new_commit = idx
-        break
-      end
-    end
+    # Collect match indices (leader implicitly matches its own last index)
+    sorted = Array(UInt64).new(@match_index.size + 1)
+    @match_index.each_value { |val| sorted << val }
+    sorted << @log.last_index # self
+    sorted.sort!
 
-    if new_commit > @commit_index
+    # The quorum-replicated index is the value at position (n - quorum).
+    # E.g. for 3 nodes, quorum=2, sorted=[0,5,10] → index 1 → 5
+    quorum_idx = sorted.size - quorum_size
+    new_commit = sorted[quorum_idx]
+
+    if new_commit > @commit_index && @log.term_at(new_commit) == @current_term
       @commit_index = new_commit
       @metrics.commit_index = @commit_index
       apply_committed_entries
@@ -97,26 +99,22 @@ module Raft::Node::Leader
   end
 
   private def resolve_pending(index : UInt64, result : Bytes) : Nil
-    @pending_requests.reject! do |req|
-      if req.index <= index
-        if req.index == index
-          @metrics.proposals_committed += 1
-          req.channel.send(ClientResponse.new(success: true, data: result))
-        else
-          req.channel.send(ClientResponse.new(success: false, data: Bytes.empty, leader_hint: @leader_id))
-        end
-        true
+    while req = @pending_requests.first?
+      break if req.index > index
+      @pending_requests.shift
+      if req.index == index
+        @metrics.proposals_committed += 1
+        req.channel.send(ClientResponse.new(success: true, data: result))
       else
-        false
+        req.channel.send(ClientResponse.new(success: false, data: Bytes.empty, leader_hint: @leader_id))
       end
     end
   end
 
   private def reject_pending_requests : Nil
-    @pending_requests.each do |req|
+    while req = @pending_requests.shift?
       req.channel.send(ClientResponse.new(success: false, data: Bytes.empty, leader_hint: @leader_id))
     end
-    @pending_requests.clear
   end
 
   private def start_replicators : Nil

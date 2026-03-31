@@ -87,13 +87,23 @@ class Raft::Log::File < Raft::Log
   end
 
   def slice(from : UInt64, to : UInt64) : Array(Entry)
-    result = Array(Entry).new
+    cap = (to - from + 1).to_i
+    cap = 0 if cap < 0
+    result = Array(Entry).new(cap)
     from.upto(to) do |idx|
       entry = get(idx)
       break unless entry
       result << entry
     end
     result
+  end
+
+  def each_in_range(from : UInt64, to : UInt64, & : Entry ->) : Nil
+    from.upto(to) do |idx|
+      entry = get(idx)
+      break unless entry
+      yield entry
+    end
   end
 
   def save_metadata(meta : Metadata) : Nil

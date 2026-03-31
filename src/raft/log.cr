@@ -42,6 +42,10 @@ abstract class Raft::Log
   # Returns entries in the inclusive range [*from*, *to*].
   abstract def slice(from : UInt64, to : UInt64) : Array(Entry)
 
+  # Yields each entry in the inclusive range [*from*, *to*] without
+  # allocating an intermediate array. Preferred over `slice` on hot paths.
+  abstract def each_in_range(from : UInt64, to : UInt64, & : Entry ->) : Nil
+
   # Persists the node's current term and voted-for state.
   abstract def save_metadata(meta : Metadata) : Nil
 

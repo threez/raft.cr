@@ -60,7 +60,7 @@ class Raft::Node
     @election_epoch = 0_u64
     @heartbeat_epoch = 0_u64
     @replicators = Hash(String, Replicator).new
-    @pending_requests = Array(PendingRequest).new
+    @pending_requests = Deque(PendingRequest).new
     @votes_received = Set(String).new
     @pre_votes_received = Set(String).new
     @next_index = Hash(String, UInt64).new
@@ -68,6 +68,10 @@ class Raft::Node
     @snapshot_buffer = nil
     @last_snapshot_index = 0_u64
     @metrics = Metrics.new
+    @batch_buf = Array(ClientRequest).new(32)
+    @deferred_buf = Array(NodeMessage).new(8)
+    @apply_buf_indices = Array(UInt64).new(64)
+    @apply_buf_commands = Array(Bytes).new(64)
 
     meta = @log.load_metadata
     @current_term = meta.current_term
@@ -244,22 +248,23 @@ class Raft::Node
         # (RPC envelopes, timer ticks) are deferred and processed first so
         # that a concurrent step-down causes the whole batch to be rejected
         # rather than appended under a stale term.
-        batch = [msg] of ClientRequest
-        deferred = [] of NodeMessage
+        @batch_buf.clear
+        @deferred_buf.clear
+        @batch_buf << msg
         loop do
           select
           when next_msg = @inbox.receive
             if next_msg.is_a?(ClientRequest)
-              batch << next_msg
+              @batch_buf << next_msg
             else
-              deferred << next_msg
+              @deferred_buf << next_msg
             end
           else
             break
           end
         end
-        deferred.each { |deferred_msg| handle_message(deferred_msg) }
-        handle_client_request_batch(batch)
+        @deferred_buf.each { |deferred_msg| handle_message(deferred_msg) }
+        handle_client_request_batch(@batch_buf)
       end
     end
   end
@@ -335,43 +340,42 @@ class Raft::Node
   private def apply_committed_entries : Nil
     return if @last_applied >= @commit_index
 
-    entries = @log.slice(@last_applied + 1, @commit_index)
-    op_indices = [] of UInt64
-    op_commands = [] of Bytes
+    @apply_buf_indices.clear
+    @apply_buf_commands.clear
 
-    flush = -> {
-      return if op_commands.empty?
-      results = @state_machine.apply_batch(op_commands)
-      if @role.leader?
-        op_indices.each_with_index { |idx, i| resolve_pending(idx, results[i]) }
-      end
-      op_indices.clear
-      op_commands.clear
-    }
-
-    entries.each do |entry|
+    @log.each_in_range(@last_applied + 1, @commit_index) do |entry|
       @last_applied = entry.index
       @metrics.entries_applied += 1
       if entry.entry_type.op?
-        op_indices << entry.index
-        op_commands << entry.data
+        @apply_buf_indices << entry.index
+        @apply_buf_commands << entry.data
       elsif entry.entry_type.noop?
-        flush.call
+        flush_apply_batch
         resolve_pending(entry.index, Bytes.empty) if @role.leader?
       elsif entry.entry_type.config?
-        flush.call
+        flush_apply_batch
         new_peers = decode_peers(entry.data)
         apply_config(new_peers) unless @role.leader? # leader already applied on propose
       end
     end
 
-    flush.call
+    flush_apply_batch
 
     # Auto-snapshot when threshold is exceeded
     threshold = @config.snapshot_threshold
     if threshold > 0 && (@last_applied - @last_snapshot_index) >= threshold.to_u64
       snapshot
     end
+  end
+
+  private def flush_apply_batch : Nil
+    return if @apply_buf_commands.empty?
+    results = @state_machine.apply_batch(@apply_buf_commands)
+    if @role.leader?
+      @apply_buf_indices.each_with_index { |idx, i| resolve_pending(idx, results[i]) }
+    end
+    @apply_buf_indices.clear
+    @apply_buf_commands.clear
   end
 
   private def apply_config(new_peers : Array(String)) : Nil

@@ -9,15 +9,23 @@ module Raft::RPC
     # :nodoc:
     FORMAT = IO::ByteFormat::BigEndian
 
+    # Shared encode buffer — avoids allocating a new IO::Memory per encode.
+    # Grows automatically for larger messages and retains capacity across calls.
+    # Guarded by a mutex for safety under preview_mt (multi-threaded mode).
+    @@encode_buf = IO::Memory.new(512)
+    @@encode_mu = Mutex.new
+
     # Encodes an RPC message as a TLV frame and writes it to *io*.
     def self.encode(message : Message, io : IO) : Nil
-      payload = IO::Memory.new
-      encode_payload(message, payload)
-      bytes = payload.to_slice
+      @@encode_mu.synchronize do
+        @@encode_buf.clear
+        encode_payload(message, @@encode_buf)
+        bytes = @@encode_buf.to_slice
 
-      io.write_byte(message.type.value)
-      io.write_bytes(bytes.size.to_u32, FORMAT)
-      io.write(bytes)
+        io.write_byte(message.type.value)
+        io.write_bytes(bytes.size.to_u32, FORMAT)
+        io.write(bytes)
+      end
     end
 
     # Encodes an RPC message and returns the TLV frame as `Bytes`.
