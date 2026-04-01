@@ -45,8 +45,7 @@ module Raft::RPC
       length = io.read_bytes(UInt32, FORMAT)
       payload = Bytes.new(length)
       io.read_fully(payload) if length > 0
-      buf = IO::Memory.new(payload)
-      decode_payload(type, buf)
+      decode_payload(type, IO::Memory.new(payload, writeable: false))
     end
 
     private def self.encode_payload(msg : RequestVote, io : IO) : Nil
@@ -111,7 +110,7 @@ module Raft::RPC
       write_string(io, msg.message)
     end
 
-    private def self.decode_payload(type : Type, io : IO) : Message
+    private def self.decode_payload(type : Type, io : IO::Memory) : Message
       case type
       in .request_vote?
         RequestVote.new(
@@ -184,9 +183,11 @@ module Raft::RPC
 
     private def self.read_string(io : IO) : String
       len = io.read_bytes(UInt16, FORMAT)
-      slice = Bytes.new(len)
-      io.read_fully(slice) if len > 0
-      String.new(slice)
+      return "" if len == 0
+      String.new(len) do |buf|
+        io.read_fully(Slice.new(buf, len))
+        {len, len}
+      end
     end
 
     private def self.write_bool(io : IO, value : Bool) : Nil
@@ -211,6 +212,15 @@ module Raft::RPC
       slice
     end
 
+    # Zero-copy: slices directly into the IO::Memory buffer instead of allocating.
+    private def self.read_bytes_field(io : IO::Memory) : Bytes
+      len = io.read_bytes(UInt32, FORMAT).to_i
+      return Bytes.empty if len == 0
+      pos = io.pos
+      io.pos += len
+      io.to_slice[pos, len]
+    end
+
     private def self.write_entries(io : IO, entries : Array(Log::Entry)) : Nil
       io.write_bytes(entries.size.to_u32, FORMAT)
       entries.each do |entry|
@@ -230,6 +240,28 @@ module Raft::RPC
         raise Raft::Error.new("Unexpected EOF reading entry type") unless type_byte
         entry_type = Log::EntryType.new(type_byte)
         data = read_bytes_field(io)
+        Log::Entry.new(index: index, term: term, entry_type: entry_type, data: data)
+      end
+    end
+
+    # Zero-copy: entry data slices directly into the IO::Memory payload buffer.
+    private def self.read_entries(io : IO::Memory) : Array(Log::Entry)
+      count = io.read_bytes(UInt32, FORMAT)
+      buf = io.to_slice
+      Array(Log::Entry).new(count.to_i) do
+        index = io.read_bytes(UInt64, FORMAT)
+        term = io.read_bytes(UInt64, FORMAT)
+        type_byte = io.read_byte
+        raise Raft::Error.new("Unexpected EOF reading entry type") unless type_byte
+        entry_type = Log::EntryType.new(type_byte)
+        data_len = io.read_bytes(UInt32, FORMAT).to_i
+        data = if data_len > 0
+                 pos = io.pos
+                 io.pos += data_len
+                 buf[pos, data_len]
+               else
+                 Bytes.empty
+               end
         Log::Entry.new(index: index, term: term, entry_type: entry_type, data: data)
       end
     end
