@@ -25,7 +25,7 @@ module Raft::Node::Leader
       term: @current_term,
       entry_type: Log::EntryType::Noop,
     )
-    @log.append([entry])
+    @log.append(entry)
   end
 
   private def handle_client_request_batch(reqs : Array(ClientRequest)) : Nil

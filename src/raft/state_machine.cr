@@ -32,7 +32,7 @@ module Raft
     #
     # Override this for bulk optimizations (e.g., a single DB transaction per batch).
     # The default implementation calls `apply` for each command individually.
-    def apply_batch(commands : Array(Bytes)) : Array(Bytes)
+    def apply(commands : Array(Bytes)) : Array(Bytes)
       commands.map { |cmd| apply(cmd) }
     end
 

@@ -38,7 +38,7 @@ class MyApp < Raft::StateMachine
   end
 
   # Optional: override for bulk optimizations (e.g. a single DB transaction per batch)
-  def apply_batch(commands : Array(Bytes)) : Array(Bytes)
+  def apply(commands : Array(Bytes)) : Array(Bytes)
     commands.map { |cmd| apply(cmd) }
   end
 

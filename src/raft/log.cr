@@ -17,12 +17,20 @@ abstract class Raft::Log
   # the candidate this node voted for (if any) in the current term.
   record Metadata, current_term : UInt64, voted_for : String?
 
-  # Appends entries to the log with conflict detection.
+  # Appends a single entry to the log with conflict detection.
   #
   # If an existing entry at the same index has a different term, all entries
-  # from that index onward are truncated before appending. Entries with
-  # matching index and term are skipped (idempotent).
-  abstract def append(entries : Array(Entry)) : Nil
+  # from that index onward are truncated before appending. An entry with
+  # matching index and term is skipped (idempotent).
+  abstract def append(entry : Entry) : Nil
+
+  # Appends multiple entries to the log with conflict detection.
+  #
+  # The default implementation delegates to the single-entry overload.
+  # Subclasses may override for batch optimizations (e.g., deferred fsync).
+  def append(entries : Array(Entry)) : Nil
+    entries.each { |entry| append(entry) }
+  end
 
   # Returns the entry at the given 1-based *index*, or `nil` if not present.
   abstract def get(index : UInt64) : Entry?

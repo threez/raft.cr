@@ -41,7 +41,20 @@ class Raft::Log::File < Raft::Log
     @log_file.seek(0, IO::Seek::End)
   end
 
+  def append(entry : Entry) : Nil
+    if @offsets.has_key?(entry.index)
+      existing_term = read_term_at_offset(@offsets[entry.index])
+      if existing_term != entry.term
+        truncate_from(entry.index)
+      else
+        return
+      end
+    end
+    write_entry(entry)
+  end
+
   def append(entries : Array(Entry)) : Nil
+    dirty = false
     entries.each do |entry|
       if @offsets.has_key?(entry.index)
         existing_term = read_term_at_offset(@offsets[entry.index])
@@ -51,8 +64,10 @@ class Raft::Log::File < Raft::Log
           next
         end
       end
-      write_entry(entry)
+      write_entry(entry, sync: false)
+      dirty = true
     end
+    do_fsync if dirty
   end
 
   def get(index : UInt64) : Entry?
@@ -172,18 +187,22 @@ class Raft::Log::File < Raft::Log
     @log_file.close
   end
 
-  private def write_entry(entry : Entry) : Nil
+  private def write_entry(entry : Entry, sync : Bool = true) : Nil
     offset = @log_file.pos
     @log_file.write_bytes(entry.index, FORMAT)
     @log_file.write_bytes(entry.term, FORMAT)
     @log_file.write_byte(entry.entry_type.value)
     @log_file.write_bytes(entry.data.size.to_u32, FORMAT)
     @log_file.write(entry.data)
-    @log_file.flush
-    LibC.fsync(@log_file.fd) if @fsync
+    do_fsync if sync
     @offsets[entry.index] = offset.to_i64
     @last_index = entry.index
     @last_term = entry.term
+  end
+
+  private def do_fsync : Nil
+    @log_file.flush
+    LibC.fsync(@log_file.fd) if @fsync
   end
 
   private def read_entry_at(offset : Int64) : Entry

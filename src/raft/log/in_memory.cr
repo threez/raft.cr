@@ -9,19 +9,17 @@ class Raft::Log::InMemory < Raft::Log
     @snapshot = nil.as({UInt64, UInt64, Bytes}?)
   end
 
-  def append(entries : Array(Entry)) : Nil
-    entries.each do |entry|
-      pos = entry.index.to_i - 1
-      if pos < @entries.size
-        existing = @entries[pos]
-        if existing.term != entry.term
-          @entries = @entries[0, pos]
-        elsif existing.term == entry.term
-          next
-        end
+  def append(entry : Entry) : Nil
+    pos = entry.index.to_i - 1
+    if pos < @entries.size
+      existing = @entries[pos]
+      if existing.term != entry.term
+        @entries = @entries[0, pos]
+      elsif existing.term == entry.term
+        return
       end
-      @entries << entry
     end
+    @entries << entry
   end
 
   def get(index : UInt64) : Entry?

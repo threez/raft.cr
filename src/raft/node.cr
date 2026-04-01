@@ -186,7 +186,7 @@ class Raft::Node
       entry_type: Raft::Log::EntryType::Config,
       data: data,
     )
-    @log.append([entry])
+    @log.append(entry)
     # Apply immediately on leader (peers update before commit for single-server changes)
     apply_config(new_peers)
     notify_replicators
@@ -212,7 +212,7 @@ class Raft::Node
       entry_type: Raft::Log::EntryType::Config,
       data: data,
     )
-    @log.append([entry])
+    @log.append(entry)
     apply_config(new_peers)
     notify_replicators
   end
@@ -370,7 +370,7 @@ class Raft::Node
 
   private def flush_apply_batch : Nil
     return if @apply_buf_commands.empty?
-    results = @state_machine.apply_batch(@apply_buf_commands)
+    results = @state_machine.apply(@apply_buf_commands)
     if @role.leader?
       @apply_buf_indices.each_with_index { |idx, i| resolve_pending(idx, results[i]) }
     end
