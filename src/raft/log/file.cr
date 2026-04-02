@@ -96,6 +96,7 @@ class Raft::Log::File < Raft::Log
       @offsets = Hash(UInt64, Int64).new
       @last_index = 0_u64
       @last_term = 0_u64
+      @compacting = false
       ::File.touch(@path) unless ::File.exists?(@path)
       @writer = ::File.open(@path, "r+b")
       @reader = ::File.open(@path, "rb")
@@ -175,50 +176,61 @@ class Raft::Log::File < Raft::Log
     end
 
     def compact(up_to_index : UInt64) : Nil
+      return if @compacting
       remaining = @offsets.keys.select { |idx| idx > up_to_index }.sort!
       return if remaining.empty? && @offsets.keys.all? { |idx| idx <= up_to_index }
 
       # Read entries while handles are still open
       entries = remaining.map { |idx| read_entry_at(@offsets[idx]) }
 
-      # Close, rewrite, reopen
-      @reader.close
-      @writer.close
+      # Remove compacted entries from the offset index immediately so
+      # concurrent reads don't try to access them. The entries are still
+      # in the file until rewrite, but get() will return nil for them.
+      @offsets.reject! { |idx, _| idx <= up_to_index }
 
-      tmp_path = @path + ".compact"
-      new_offsets = Hash(UInt64, Int64).new
-      ::File.open(tmp_path, "wb") do |file|
-        entries.each do |entry|
-          offset = file.pos
-          file.write_bytes(entry.index, FORMAT)
-          file.write_bytes(entry.term, FORMAT)
-          file.write_byte(entry.entry_type.value)
-          file.write_bytes(entry.data.size.to_u32, FORMAT)
-          file.write(entry.data)
-          new_offsets[entry.index] = offset.to_i64
+      # Run the file rewrite in a background fiber to avoid blocking
+      # the event loop (fsync can take >100ms, causing election timeouts).
+      @compacting = true
+      spawn do
+        @reader.close
+        @writer.close
+
+        tmp_path = @path + ".compact"
+        new_offsets = Hash(UInt64, Int64).new
+        ::File.open(tmp_path, "wb") do |file|
+          entries.each do |entry|
+            offset = file.pos
+            file.write_bytes(entry.index, FORMAT)
+            file.write_bytes(entry.term, FORMAT)
+            file.write_byte(entry.entry_type.value)
+            file.write_bytes(entry.data.size.to_u32, FORMAT)
+            file.write(entry.data)
+            new_offsets[entry.index] = offset.to_i64
+          end
+          if @fsync
+            file.flush
+            LibC.fsync(file.fd)
+          end
         end
-        if @fsync
-          file.flush
-          LibC.fsync(file.fd)
+
+        ::File.rename(tmp_path, @path)
+        fsync_dir if @fsync
+        @offsets = new_offsets
+
+        if entries.empty?
+          @last_index = 0_u64
+          @last_term = 0_u64
+        else
+          @last_index = entries.last.index
+          @last_term = entries.last.term
         end
+
+        @writer = ::File.open(@path, "r+b")
+        @reader = ::File.open(@path, "rb")
+        @writer.seek(0, IO::Seek::End)
+      ensure
+        @compacting = false
       end
-
-      ::File.rename(tmp_path, @path)
-      fsync_dir if @fsync
-      @offsets = new_offsets
-
-      # Update last_index/last_term from known entries (no read needed)
-      if entries.empty?
-        @last_index = 0_u64
-        @last_term = 0_u64
-      else
-        @last_index = entries.last.index
-        @last_term = entries.last.term
-      end
-
-      @writer = ::File.open(@path, "r+b")
-      @reader = ::File.open(@path, "rb")
-      @writer.seek(0, IO::Seek::End)
     end
 
     def close : Nil
