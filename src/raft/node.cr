@@ -136,6 +136,20 @@ class Raft::Node
     LOGGER.info { "Node #{@id} snapshot taken (index=#{@last_applied})" }
   end
 
+  # Takes a snapshot of state at @last_applied but compacts the log only
+  # up to *compact_index*. Used by the leader to avoid compacting entries
+  # that peers have not yet replicated.
+  private def snapshot_at(compact_index : UInt64) : Nil
+    return if @last_applied == 0_u64 || compact_index == 0_u64
+    return if compact_index <= @last_snapshot_index
+    data = @state_machine.snapshot
+    term = @log.term_at(compact_index) || @current_term
+    @log.save_snapshot(compact_index, term, data)
+    @last_snapshot_index = compact_index
+    @metrics.snapshots_installed += 1
+    LOGGER.info { "Node #{@id} snapshot taken (index=#{compact_index}, applied=#{@last_applied})" }
+  end
+
   # Gracefully shuts down the node, stopping replicators and the transport.
   # Takes a final snapshot before stopping for fast recovery on restart.
   def stop : Nil
@@ -400,10 +414,17 @@ class Raft::Node
 
     flush_apply_batch
 
-    # Auto-snapshot when threshold is exceeded
+    # Auto-snapshot when threshold is exceeded.
+    # On the leader, compact only up to min(match_index) so we don't remove
+    # entries that live peers still need — avoiding unnecessary snapshot sends.
     threshold = @config.snapshot_threshold
     if threshold > 0 && (@last_applied - @last_snapshot_index) >= threshold.to_u64
-      snapshot
+      if @role.leader? && !@match_index.empty?
+        safe_index = @match_index.values.min
+        snapshot_at(safe_index) if safe_index > @last_snapshot_index
+      else
+        snapshot
+      end
     end
   end
 
