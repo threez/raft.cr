@@ -66,11 +66,9 @@ class HttpApi
 
   private def handle_leader_check(context : HTTP::Server::Context) : Nil
     if @node.role.leader?
-      # Redirect to own status so the client gets leader info
-      context.response.status = HTTP::Status::TEMPORARY_REDIRECT
-      context.response.headers["Location"] = "/_status"
+      context.response.status = HTTP::Status::NO_CONTENT
     else
-      redirect_to_leader(context, "/_status", @node.leader)
+      redirect_to_leader(context, "/_leader", @node.leader)
     end
   end
 
@@ -94,8 +92,8 @@ class HttpApi
   end
 
   private def handle_get(context : HTTP::Server::Context, key : String) : Nil
-    # Confirm leadership via quorum round, then read locally
-    @node.read(Bytes.empty)
+    # Local read (eventual consistency) — no quorum round needed.
+    # For linearizable reads, use @node.read(Bytes.empty) instead.
     if value = @kv_store.get(key)
       context.response.status = HTTP::Status::OK
       context.response.content_type = "application/octet-stream"
@@ -103,8 +101,6 @@ class HttpApi
     else
       context.response.status = HTTP::Status::NOT_FOUND
     end
-  rescue ex : Raft::Error::NotLeader
-    redirect_to_leader(context, "/#{key}", ex.leader_hint)
   end
 
   private def handle_put(context : HTTP::Server::Context, key : String) : Nil
