@@ -64,12 +64,20 @@ module Raft::Node::Follower
 
   private def handle_install_snapshot(msg : RPC::InstallSnapshot) : Nil
     if msg.term < @current_term
-      @transport.send(msg.leader_id, RPC::InstallSnapshotResponse.new(term: @current_term))
+      @transport.send(msg.leader_id, RPC::InstallSnapshotResponse.new(
+        term: @current_term, last_included_index: msg.last_included_index))
       return
     end
 
     @leader_id = msg.leader_id
     reset_election_timer
+
+    # Skip if we already have this or a newer snapshot applied
+    if msg.last_included_index <= @last_applied
+      @transport.send(msg.leader_id, RPC::InstallSnapshotResponse.new(
+        term: @current_term, last_included_index: msg.last_included_index))
+      return
+    end
 
     # Multi-chunk snapshot support
     if msg.offset == 0_u64
@@ -84,14 +92,15 @@ module Raft::Node::Follower
         @snapshot_buffer = nil
         @state_machine.restore(IO::Memory.new(snapshot_data))
         @log.save_snapshot(msg.last_included_index, msg.last_included_term, snapshot_data)
-        @last_applied = msg.last_included_index if msg.last_included_index > @last_applied
+        @last_applied = msg.last_included_index
         @commit_index = msg.last_included_index if msg.last_included_index > @commit_index
         @metrics.snapshots_installed += 1
         LOGGER.info { "Node #{@id} installed snapshot (index=#{msg.last_included_index})" }
       end
     end
 
-    @transport.send(msg.leader_id, RPC::InstallSnapshotResponse.new(term: @current_term))
+    @transport.send(msg.leader_id, RPC::InstallSnapshotResponse.new(
+      term: @current_term, last_included_index: msg.last_included_index))
   end
 
   private def log_up_to_date?(candidate_term : UInt64, candidate_index : UInt64) : Bool

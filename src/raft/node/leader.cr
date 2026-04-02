@@ -102,6 +102,18 @@ module Raft::Node::Leader
     end
   end
 
+  private def handle_install_snapshot_response(from : String, msg : RPC::InstallSnapshotResponse) : Nil
+    return unless @role.leader?
+    return if msg.last_included_index == 0_u64
+
+    if msg.last_included_index > (@match_index[from]? || 0_u64)
+      @match_index[from] = msg.last_included_index
+      @next_index[from] = msg.last_included_index + 1
+      advance_commit_index
+      @replicators[from]?.try(&.ack(true))
+    end
+  end
+
   private def resolve_pending(index : UInt64, result : Bytes) : Nil
     while req = @pending_requests.first?
       break if req.index > index
