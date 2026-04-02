@@ -17,6 +17,7 @@ require "./raft/node/follower"
 require "./raft/node/candidate"
 require "./raft/node/leader"
 require "./raft/node/replicator"
+require "./raft/rtt_monitor"
 require "./raft/node"
 
 # Raft consensus algorithm implementation for Crystal.

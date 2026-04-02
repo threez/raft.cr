@@ -55,6 +55,7 @@ class Raft::Node
   @voted_for : String?
   @leader_id : String?
   @snapshot_buffer : IO::Memory?
+  @rtt_monitor : RTTMonitor?
 
   def initialize(@id : String, peers : Array(String), @state_machine : StateMachine,
                  @transport : Transport, @log : Raft::Log, @config : Config = Config.new,
@@ -81,6 +82,7 @@ class Raft::Node
     @snapshot_buffer = nil
     @last_snapshot_index = 0_u64
     @metrics = Metrics.new
+    @rtt_monitor = @config.rtt_tuning? ? RTTMonitor.new(@id, @transport, @config, -> { @role.leader? }) : nil
     @batch_buf = Array(ClientRequest).new(32)
     @deferred_buf = Array(NodeMessage).new(8)
     @apply_buf_indices = Array(UInt64).new(64)
@@ -116,6 +118,7 @@ class Raft::Node
     spawn_rpc_bridge
     reset_election_timer
     spawn_event_loop
+    @rtt_monitor.try(&.start(peers))
     LOGGER.info { "Node #{@id} started" }
   end
 
@@ -138,6 +141,7 @@ class Raft::Node
   def stop : Nil
     return unless @running
     @running = false
+    @rtt_monitor.try(&.stop)
     stop_replicators
     reject_pending_requests
     snapshot if @last_applied > @last_snapshot_index
@@ -306,7 +310,8 @@ class Raft::Node
       rpc = msg.message
       # PreVote/Handshake/Error messages should NOT trigger step-down
       unless rpc.is_a?(RPC::PreVote) || rpc.is_a?(RPC::PreVoteResponse) ||
-             rpc.is_a?(RPC::Handshake) || rpc.is_a?(RPC::ErrorMessage)
+             rpc.is_a?(RPC::Handshake) || rpc.is_a?(RPC::ErrorMessage) ||
+             rpc.is_a?(RPC::Ping) || rpc.is_a?(RPC::Pong) || rpc.is_a?(RPC::ConfigUpdate)
         check_term(rpc)
       end
       dispatch_rpc(msg.from, rpc)
@@ -324,9 +329,12 @@ class Raft::Node
     when RPC::RequestVote             then handle_request_vote(msg)
     when RPC::RequestVoteResponse     then handle_request_vote_response(from, msg)
     when RPC::InstallSnapshot         then handle_install_snapshot(msg)
-    when RPC::InstallSnapshotResponse then nil
+    when RPC::InstallSnapshotResponse then handle_install_snapshot_response(from, msg)
     when RPC::PreVote                 then handle_pre_vote(msg)
     when RPC::PreVoteResponse         then handle_pre_vote_response(from, msg)
+    when RPC::Ping                    then @transport.send(from, RPC::Pong.new(sequence: msg.sequence))
+    when RPC::Pong                    then @rtt_monitor.try(&.record_pong(from, msg.sequence))
+    when RPC::ConfigUpdate            then handle_config_update(msg)
     when RPC::Handshake               then nil # consumed during connection setup
     when RPC::ErrorMessage            then nil # consumed during connection setup
     end
@@ -407,6 +415,17 @@ class Raft::Node
     end
     @apply_buf_indices.clear
     @apply_buf_commands.clear
+  end
+
+  private def handle_config_update(msg : RPC::ConfigUpdate) : Nil
+    return unless @config.rtt_tuning?
+    @config.heartbeat_interval = msg.heartbeat_interval
+    @config.election_timeout_min = msg.election_timeout_min
+    @config.election_timeout_max = msg.election_timeout_max
+    LOGGER.info {
+      "Node #{@id} RTT config received: heartbeat=#{msg.heartbeat_interval}ms " \
+      "election=#{msg.election_timeout_min}-#{msg.election_timeout_max}ms"
+    }
   end
 
   private def apply_config(new_voters : Array(String), new_learners : Array(String)) : Nil

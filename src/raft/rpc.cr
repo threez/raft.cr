@@ -16,6 +16,9 @@ module Raft::RPC
     InstallSnapshotResponse = 0x06
     PreVote                 = 0x07
     PreVoteResponse         = 0x08
+    Ping                    = 0x09
+    Pong                    = 0x0A
+    ConfigUpdate            = 0x0B
     Error                   = 0xFF
   end
 
@@ -129,8 +132,10 @@ module Raft::RPC
   struct InstallSnapshotResponse
     # The responder's current term.
     getter term : UInt64
+    # The last included index from the snapshot that was installed.
+    getter last_included_index : UInt64
 
-    def initialize(@term : UInt64)
+    def initialize(@term : UInt64, @last_included_index : UInt64 = 0_u64)
     end
 
     def type : Type
@@ -208,8 +213,54 @@ module Raft::RPC
     end
   end
 
+  # RTT measurement probe. Sent by the RTT monitor to measure round-trip
+  # time to a peer. The receiver immediately responds with a `Pong`.
+  struct Ping
+    # Monotonic sequence number to match requests with responses.
+    getter sequence : UInt64
+
+    def initialize(@sequence : UInt64)
+    end
+
+    def type : Type
+      Type::Ping
+    end
+  end
+
+  # Response to a `Ping` probe. Echoes back the sequence number so the
+  # sender can calculate round-trip time.
+  struct Pong
+    # Echoed sequence number from the `Ping`.
+    getter sequence : UInt64
+
+    def initialize(@sequence : UInt64)
+    end
+
+    def type : Type
+      Type::Pong
+    end
+  end
+
+  # Timeout configuration update distributed by the leader after RTT tuning.
+  # Followers apply these values to ensure cluster-wide consistency.
+  struct ConfigUpdate
+    # Tuned heartbeat interval in milliseconds.
+    getter heartbeat_interval : Int32
+    # Tuned minimum election timeout in milliseconds.
+    getter election_timeout_min : Int32
+    # Tuned maximum election timeout in milliseconds.
+    getter election_timeout_max : Int32
+
+    def initialize(@heartbeat_interval : Int32, @election_timeout_min : Int32, @election_timeout_max : Int32)
+    end
+
+    def type : Type
+      Type::ConfigUpdate
+    end
+  end
+
   # Union of all RPC message types (including handshake and error frames).
-  alias Message = RequestVote | RequestVoteResponse | AppendEntries | AppendEntriesResponse | InstallSnapshot | InstallSnapshotResponse | PreVote | PreVoteResponse | Handshake | ErrorMessage
+  alias Message = RequestVote | RequestVoteResponse | AppendEntries | AppendEntriesResponse | InstallSnapshot | InstallSnapshotResponse | PreVote | PreVoteResponse | Ping | Pong | ConfigUpdate | Handshake | ErrorMessage
 
   # Wraps an RPC message with the sender's node ID.
   #

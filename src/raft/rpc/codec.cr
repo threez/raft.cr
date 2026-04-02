@@ -97,6 +97,7 @@ module Raft::RPC
 
     private def self.encode_payload(msg : InstallSnapshotResponse, io : IO) : Nil
       io.write_bytes(msg.term, FORMAT)
+      io.write_bytes(msg.last_included_index, FORMAT)
     end
 
     private def self.encode_payload(msg : PreVote, io : IO) : Nil
@@ -110,6 +111,20 @@ module Raft::RPC
     private def self.encode_payload(msg : Handshake, io : IO) : Nil
       io.write(msg.hmac)
       io.write(msg.nonce)
+    end
+
+    private def self.encode_payload(msg : Ping, io : IO) : Nil
+      io.write_bytes(msg.sequence, FORMAT)
+    end
+
+    private def self.encode_payload(msg : Pong, io : IO) : Nil
+      io.write_bytes(msg.sequence, FORMAT)
+    end
+
+    private def self.encode_payload(msg : ConfigUpdate, io : IO) : Nil
+      io.write_bytes(msg.heartbeat_interval, FORMAT)
+      io.write_bytes(msg.election_timeout_min, FORMAT)
+      io.write_bytes(msg.election_timeout_max, FORMAT)
     end
 
     private def self.encode_payload(msg : ErrorMessage, io : IO) : Nil
@@ -160,6 +175,7 @@ module Raft::RPC
       in .install_snapshot_response?
         InstallSnapshotResponse.new(
           term: io.read_bytes(UInt64, FORMAT),
+          last_included_index: io.read_bytes(UInt64, FORMAT),
         )
       in .pre_vote?
         PreVote.new(
@@ -186,6 +202,16 @@ module Raft::RPC
                         {h, n}
                       end
         Handshake.new(hmac: hmac, nonce: nonce)
+      in .ping?
+        Ping.new(sequence: io.read_bytes(UInt64, FORMAT))
+      in .pong?
+        Pong.new(sequence: io.read_bytes(UInt64, FORMAT))
+      in .config_update?
+        ConfigUpdate.new(
+          heartbeat_interval: io.read_bytes(Int32, FORMAT),
+          election_timeout_min: io.read_bytes(Int32, FORMAT),
+          election_timeout_max: io.read_bytes(Int32, FORMAT),
+        )
       in .error?
         ErrorMessage.new(message: read_string(io))
       end

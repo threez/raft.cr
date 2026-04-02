@@ -47,6 +47,14 @@ module Raft
     # more important than strict consistency.
     getter? active_passive : Bool
 
+    # Enable automatic RTT-based timeout tuning. When enabled, the node
+    # periodically measures round-trip time to peers and adjusts heartbeat
+    # and election timeouts following etcd best practices.
+    getter? rtt_tuning : Bool
+
+    # Interval in seconds between RTT measurement probes. Default: 60.
+    property rtt_probe_interval : Int32
+
     def initialize(
       @election_timeout_min : Int32 = 150,
       @election_timeout_max : Int32 = 300,
@@ -57,6 +65,8 @@ module Raft
       @snapshot_threshold : Int32 = 1000,
       @max_inflight_rpcs : Int32 = 2,
       @active_passive : Bool = false,
+      @rtt_tuning : Bool = false,
+      @rtt_probe_interval : Int32 = 60,
     )
     end
   end
