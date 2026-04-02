@@ -52,19 +52,22 @@ class Raft::Node::Replicator
   private def run : Nil
     @pipeline_next_index = @next_index[@peer_id]? || 1_u64
     @inflight = 0
+    awaiting_snapshot_ack = false
 
     while @running
       confirmed_next = @next_index[@peer_id]? || 1_u64
 
       # Check if follower is behind the snapshot
-      if snapshot = @log.load_snapshot
-        snap_index, snap_term, snap_data = snapshot
-        if confirmed_next <= snap_index
-          send_snapshot(snap_index, snap_term, snap_data)
-          @next_index[@peer_id] = snap_index + 1
-          @pipeline_next_index = snap_index + 1
-          @inflight = 0
-          next
+      if !awaiting_snapshot_ack
+        if snapshot = @log.load_snapshot
+          snap_index, snap_term, snap_data = snapshot
+          if confirmed_next <= snap_index
+            send_snapshot(snap_index, snap_term, snap_data)
+            @next_index[@peer_id] = snap_index + 1
+            @pipeline_next_index = snap_index + 1
+            @inflight = 0
+            awaiting_snapshot_ack = true
+          end
         end
       end
 
@@ -87,13 +90,16 @@ class Raft::Node::Replicator
       when @notify_channel.receive
       when result = @ack_channel.receive
         @inflight = {@inflight - 1, 0}.max
-        unless result
+        if result
+          awaiting_snapshot_ack = false
+        else
           # Failure: reset pipeline to confirmed position; any remaining in-flight
           # RPCs will also fail, and their acks decrement from 0 (clamped by max above)
           @pipeline_next_index = @next_index[@peer_id]? || 1_u64
           @inflight = 0
         end
       when timeout(@config.heartbeat_interval.milliseconds)
+        awaiting_snapshot_ack = false # timeout expired, allow retry
       end
     end
   rescue Channel::ClosedError
