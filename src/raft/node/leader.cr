@@ -27,6 +27,7 @@ module Raft::Node::Leader
       entry_type: Log::EntryType::Noop,
     )
     @log.append(entry)
+    advance_commit_index
   end
 
   private def handle_client_request_batch(reqs : Array(ClientRequest)) : Nil
@@ -56,6 +57,7 @@ module Raft::Node::Leader
     entries.each_with_index do |entry, i|
       @pending_requests << PendingRequest.new(entry.index, reqs[i].response_channel)
     end
+    advance_commit_index
     notify_replicators
   end
 

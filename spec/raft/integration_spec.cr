@@ -393,4 +393,139 @@ describe "Raft Integration" do
     learner_node.stop
     cluster.stop
   end
+
+  describe "active-passive mode" do
+    it "2-node cluster elects a leader" do
+      Raft::Transport::InMemory.reset
+      cfg = Raft::Config.new(
+        election_timeout_min: 50, election_timeout_max: 100,
+        heartbeat_interval: 25, active_passive: true,
+      )
+      node1 = Raft::Node.new(
+        id: "ap-1", peers: ["ap-2"],
+        state_machine: TestStateMachine.new,
+        transport: Raft::Transport::InMemory.new("ap-1"),
+        log: Raft::Log::InMemory.new, config: cfg,
+      )
+      node2 = Raft::Node.new(
+        id: "ap-2", peers: ["ap-1"],
+        state_machine: TestStateMachine.new,
+        transport: Raft::Transport::InMemory.new("ap-2"),
+        log: Raft::Log::InMemory.new, config: cfg,
+      )
+
+      node1.start
+      node2.start
+
+      wait_until { node1.role.leader? || node2.role.leader? }.should be_true
+      leader = node1.role.leader? ? node1 : node2
+      result = leader.propose("ap-test".to_slice)
+      result.should eq("ap-test".to_slice)
+
+      node1.stop
+      node2.stop
+    end
+
+    it "surviving node becomes leader when peer fails" do
+      Raft::Transport::InMemory.reset
+      cfg = Raft::Config.new(
+        election_timeout_min: 50, election_timeout_max: 100,
+        heartbeat_interval: 25, active_passive: true,
+      )
+      sm1 = TestStateMachine.new
+      sm2 = TestStateMachine.new
+      node1 = Raft::Node.new(
+        id: "ap-1", peers: ["ap-2"],
+        state_machine: sm1,
+        transport: Raft::Transport::InMemory.new("ap-1"),
+        log: Raft::Log::InMemory.new, config: cfg,
+      )
+      node2 = Raft::Node.new(
+        id: "ap-2", peers: ["ap-1"],
+        state_machine: sm2,
+        transport: Raft::Transport::InMemory.new("ap-2"),
+        log: Raft::Log::InMemory.new, config: cfg,
+      )
+
+      node1.start
+      node2.start
+      wait_until { node1.role.leader? || node2.role.leader? }.should be_true
+
+      leader = node1.role.leader? ? node1 : node2
+      follower = node1.role.leader? ? node2 : node1
+
+      # Write while both are up
+      leader.propose("before-failure".to_slice)
+
+      # Kill the leader — follower should take over
+      leader.stop
+
+      # Follower should become leader (quorum = 1)
+      wait_until { follower.role.leader? }.should be_true
+
+      # New leader can accept writes on its own
+      result = follower.propose("after-failure".to_slice)
+      result.should eq("after-failure".to_slice)
+
+      follower.stop
+    end
+
+    it "both nodes accept writes during partition, loser reconciles on heal" do
+      Raft::Transport::InMemory.reset
+      cfg = Raft::Config.new(
+        election_timeout_min: 50, election_timeout_max: 100,
+        heartbeat_interval: 25, active_passive: true,
+      )
+      sm1 = TestStateMachine.new
+      sm2 = TestStateMachine.new
+      node1 = Raft::Node.new(
+        id: "ap-1", peers: ["ap-2"],
+        state_machine: sm1,
+        transport: Raft::Transport::InMemory.new("ap-1"),
+        log: Raft::Log::InMemory.new, config: cfg,
+      )
+      node2 = Raft::Node.new(
+        id: "ap-2", peers: ["ap-1"],
+        state_machine: sm2,
+        transport: Raft::Transport::InMemory.new("ap-2"),
+        log: Raft::Log::InMemory.new, config: cfg,
+      )
+
+      node1.start
+      node2.start
+      wait_until { node1.role.leader? || node2.role.leader? }.should be_true
+
+      leader = node1.role.leader? ? node1 : node2
+      follower = node1.role.leader? ? node2 : node1
+
+      leader.propose("before-split".to_slice)
+
+      # Network partition
+      Raft::Transport::InMemory.partition("ap-1", "ap-2")
+
+      # Follower should become leader on its own
+      wait_until { follower.role.leader? }.should be_true
+
+      # Both accept writes independently (split brain)
+      leader.propose("leader-side".to_slice)
+      follower.propose("follower-side".to_slice)
+
+      # Heal partition — nodes reconcile via term comparison
+      Raft::Transport::InMemory.heal("ap-1", "ap-2")
+
+      # Wait for one to step down (higher term wins)
+      wait_until {
+        leaders = [node1, node2].count(&.role.leader?)
+        leaders == 1
+      }.should be_true
+
+      # The surviving leader can still propose
+      surviving_leader = node1.role.leader? ? node1 : node2
+      result = surviving_leader.propose("after-heal".to_slice)
+      result.should eq("after-heal".to_slice)
+
+      node1.stop
+      node2.stop
+    end
+  end
 end

@@ -71,7 +71,12 @@ module Raft::Node::Candidate
   end
 
   private def quorum_size : Int32
-    (@voters.size + 1) // 2 + 1
+    total = @voters.size + 1 # voters + self
+    if @config.active_passive? && total == 2
+      1
+    else
+      total // 2 + 1
+    end
   end
 
   private def check_election_won : Nil

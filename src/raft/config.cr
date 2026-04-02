@@ -37,6 +37,16 @@ module Raft
     # consecutive batches. Set to 1 to disable pipelining and match pre-pipeline behaviour.
     property max_inflight_rpcs : Int32
 
+    # Enable active-passive mode for 2-node clusters. Lowers quorum to 1 so
+    # either node can elect itself and accept writes when the other is down.
+    #
+    # **WARNING**: This sacrifices consistency for availability. During a
+    # network partition both nodes may accept writes independently. When the
+    # partition heals, the node with the lower term loses its divergent entries
+    # via normal Raft log conflict resolution. Only use when availability is
+    # more important than strict consistency.
+    getter? active_passive : Bool
+
     def initialize(
       @election_timeout_min : Int32 = 150,
       @election_timeout_max : Int32 = 300,
@@ -46,6 +56,7 @@ module Raft
       @snapshot_chunk_size : Int32 = 65536,
       @snapshot_threshold : Int32 = 1000,
       @max_inflight_rpcs : Int32 = 2,
+      @active_passive : Bool = false,
     )
     end
   end
