@@ -328,6 +328,7 @@ class Raft::Log::File < Raft::Log
     end
 
     def save(meta : Metadata) : Nil
+      Dir.mkdir_p(@data_dir) unless Dir.exists?(@data_dir)
       tmp_path = @path + ".tmp"
       ::File.open(tmp_path, "wb") do |file|
         file.write_bytes(meta.current_term, FORMAT)
