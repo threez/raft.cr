@@ -8,6 +8,8 @@ module Raft::RPC
   module Codec
     # :nodoc:
     FORMAT = IO::ByteFormat::BigEndian
+    # :nodoc:
+    ENTRY_HEADER_SIZE = 21 # 8 (index) + 8 (term) + 1 (type) + 4 (data_len)
 
     # Shared encode buffer — avoids allocating a new IO::Memory per encode.
     # Grows automatically for larger messages and retains capacity across calls.
@@ -48,16 +50,26 @@ module Raft::RPC
       decode_payload(type, IO::Memory.new(payload, writeable: false))
     end
 
-    private def self.encode_payload(msg : RequestVote, io : IO) : Nil
+    # --- Encode helpers ---
+
+    private def self.encode_vote_fields(io : IO, msg) : Nil
       io.write_bytes(msg.term, FORMAT)
       write_string(io, msg.candidate_id)
       io.write_bytes(msg.last_log_index, FORMAT)
       io.write_bytes(msg.last_log_term, FORMAT)
     end
 
-    private def self.encode_payload(msg : RequestVoteResponse, io : IO) : Nil
+    private def self.encode_vote_response_fields(io : IO, msg) : Nil
       io.write_bytes(msg.term, FORMAT)
       write_bool(io, msg.vote_granted?)
+    end
+
+    private def self.encode_payload(msg : RequestVote, io : IO) : Nil
+      encode_vote_fields(io, msg)
+    end
+
+    private def self.encode_payload(msg : RequestVoteResponse, io : IO) : Nil
+      encode_vote_response_fields(io, msg)
     end
 
     private def self.encode_payload(msg : AppendEntries, io : IO) : Nil
@@ -90,15 +102,11 @@ module Raft::RPC
     end
 
     private def self.encode_payload(msg : PreVote, io : IO) : Nil
-      io.write_bytes(msg.term, FORMAT)
-      write_string(io, msg.candidate_id)
-      io.write_bytes(msg.last_log_index, FORMAT)
-      io.write_bytes(msg.last_log_term, FORMAT)
+      encode_vote_fields(io, msg)
     end
 
     private def self.encode_payload(msg : PreVoteResponse, io : IO) : Nil
-      io.write_bytes(msg.term, FORMAT)
-      write_bool(io, msg.vote_granted?)
+      encode_vote_response_fields(io, msg)
     end
 
     private def self.encode_payload(msg : Handshake, io : IO) : Nil
@@ -110,115 +118,89 @@ module Raft::RPC
       write_string(io, msg.message)
     end
 
+    # --- Decode ---
+
     private def self.decode_payload(type : Type, io : IO::Memory) : Message
+      buf = io.to_slice
       case type
       in .request_vote?
         RequestVote.new(
-          term: io.read_bytes(UInt64, FORMAT),
-          candidate_id: read_string(io),
-          last_log_index: io.read_bytes(UInt64, FORMAT),
-          last_log_term: io.read_bytes(UInt64, FORMAT),
+          term: read_uint64(buf, io),
+          candidate_id: read_string(buf, io),
+          last_log_index: read_uint64(buf, io),
+          last_log_term: read_uint64(buf, io),
         )
       in .request_vote_response?
         RequestVoteResponse.new(
-          term: io.read_bytes(UInt64, FORMAT),
-          vote_granted: read_bool(io),
+          term: read_uint64(buf, io),
+          vote_granted: read_bool(buf, io),
         )
       in .append_entries?
         AppendEntries.new(
-          term: io.read_bytes(UInt64, FORMAT),
-          leader_id: read_string(io),
-          prev_log_index: io.read_bytes(UInt64, FORMAT),
-          prev_log_term: io.read_bytes(UInt64, FORMAT),
-          entries: read_entries(io),
-          leader_commit: io.read_bytes(UInt64, FORMAT),
+          term: read_uint64(buf, io),
+          leader_id: read_string(buf, io),
+          prev_log_index: read_uint64(buf, io),
+          prev_log_term: read_uint64(buf, io),
+          entries: read_entries(buf, io),
+          leader_commit: read_uint64(buf, io),
         )
       in .append_entries_response?
         AppendEntriesResponse.new(
-          term: io.read_bytes(UInt64, FORMAT),
-          success: read_bool(io),
-          match_index: io.read_bytes(UInt64, FORMAT),
+          term: read_uint64(buf, io),
+          success: read_bool(buf, io),
+          match_index: read_uint64(buf, io),
         )
       in .install_snapshot?
         InstallSnapshot.new(
-          term: io.read_bytes(UInt64, FORMAT),
-          leader_id: read_string(io),
-          last_included_index: io.read_bytes(UInt64, FORMAT),
-          last_included_term: io.read_bytes(UInt64, FORMAT),
-          offset: io.read_bytes(UInt64, FORMAT),
-          data: read_bytes_field(io),
-          done: read_bool(io),
+          term: read_uint64(buf, io),
+          leader_id: read_string(buf, io),
+          last_included_index: read_uint64(buf, io),
+          last_included_term: read_uint64(buf, io),
+          offset: read_uint64(buf, io),
+          data: read_bytes_field(buf, io),
+          done: read_bool(buf, io),
         )
       in .install_snapshot_response?
         InstallSnapshotResponse.new(
-          term: io.read_bytes(UInt64, FORMAT),
+          term: read_uint64(buf, io),
         )
       in .pre_vote?
         PreVote.new(
-          term: io.read_bytes(UInt64, FORMAT),
-          candidate_id: read_string(io),
-          last_log_index: io.read_bytes(UInt64, FORMAT),
-          last_log_term: io.read_bytes(UInt64, FORMAT),
+          term: read_uint64(buf, io),
+          candidate_id: read_string(buf, io),
+          last_log_index: read_uint64(buf, io),
+          last_log_term: read_uint64(buf, io),
         )
       in .pre_vote_response?
         PreVoteResponse.new(
-          term: io.read_bytes(UInt64, FORMAT),
-          vote_granted: read_bool(io),
+          term: read_uint64(buf, io),
+          vote_granted: read_bool(buf, io),
         )
       in .handshake?
-        hmac = Bytes.new(32)
-        io.read_fully(hmac)
-        nonce = Bytes.new(32)
-        io.read_fully(nonce)
+        pos = io.pos
+        hmac = buf[pos, 32]
+        nonce = buf[pos + 32, 32]
+        io.pos += 64
         Handshake.new(hmac: hmac, nonce: nonce)
       in .error?
-        ErrorMessage.new(message: read_string(io))
+        ErrorMessage.new(message: read_string(buf, io))
       end
     end
+
+    # --- Encode primitives ---
 
     private def self.write_string(io : IO, str : String) : Nil
       io.write_bytes(str.bytesize.to_u16, FORMAT)
       io.write(str.to_slice)
     end
 
-    private def self.read_string(io : IO) : String
-      len = io.read_bytes(UInt16, FORMAT)
-      return "" if len == 0
-      String.new(len) do |buf|
-        io.read_fully(Slice.new(buf, len))
-        {len, len}
-      end
-    end
-
     private def self.write_bool(io : IO, value : Bool) : Nil
       io.write_byte(value ? 1_u8 : 0_u8)
-    end
-
-    private def self.read_bool(io : IO) : Bool
-      byte = io.read_byte
-      raise Raft::Error.new("Unexpected EOF reading bool") unless byte
-      byte != 0_u8
     end
 
     private def self.write_bytes_field(io : IO, data : Bytes) : Nil
       io.write_bytes(data.size.to_u32, FORMAT)
       io.write(data)
-    end
-
-    private def self.read_bytes_field(io : IO) : Bytes
-      len = io.read_bytes(UInt32, FORMAT)
-      slice = Bytes.new(len)
-      io.read_fully(slice) if len > 0
-      slice
-    end
-
-    # Zero-copy: slices directly into the IO::Memory buffer instead of allocating.
-    private def self.read_bytes_field(io : IO::Memory) : Bytes
-      len = io.read_bytes(UInt32, FORMAT).to_i
-      return Bytes.empty if len == 0
-      pos = io.pos
-      io.pos += len
-      io.to_slice[pos, len]
     end
 
     private def self.write_entries(io : IO, entries : Array(Log::Entry)) : Nil
@@ -231,34 +213,59 @@ module Raft::RPC
       end
     end
 
-    private def self.read_entries(io : IO) : Array(Log::Entry)
-      count = io.read_bytes(UInt32, FORMAT)
-      Array(Log::Entry).new(count.to_i) do
-        index = io.read_bytes(UInt64, FORMAT)
-        term = io.read_bytes(UInt64, FORMAT)
-        type_byte = io.read_byte
-        raise Raft::Error.new("Unexpected EOF reading entry type") unless type_byte
-        entry_type = Log::EntryType.new(type_byte)
-        data = read_bytes_field(io)
-        Log::Entry.new(index: index, term: term, entry_type: entry_type, data: data)
+    # --- Decode primitives (direct buffer access) ---
+
+    private def self.read_uint64(buf : Bytes, io : IO::Memory) : UInt64
+      pos = io.pos
+      io.pos += 8
+      FORMAT.decode(UInt64, buf[pos, 8])
+    end
+
+    private def self.read_bool(buf : Bytes, io : IO::Memory) : Bool
+      pos = io.pos
+      io.pos += 1
+      buf[pos] != 0_u8
+    end
+
+    private def self.read_string(buf : Bytes, io : IO::Memory) : String
+      pos = io.pos
+      len = FORMAT.decode(UInt16, buf[pos, 2]).to_i
+      io.pos += 2
+      return "" if len == 0
+      String.new(len) do |str_buf|
+        buf[io.pos, len].copy_to(Slice.new(str_buf, len))
+        io.pos += len
+        {len, len}
       end
     end
 
-    # Zero-copy: entry data slices directly into the IO::Memory payload buffer.
-    private def self.read_entries(io : IO::Memory) : Array(Log::Entry)
-      count = io.read_bytes(UInt32, FORMAT)
-      buf = io.to_slice
-      Array(Log::Entry).new(count.to_i) do
-        index = io.read_bytes(UInt64, FORMAT)
-        term = io.read_bytes(UInt64, FORMAT)
-        type_byte = io.read_byte
-        raise Raft::Error.new("Unexpected EOF reading entry type") unless type_byte
-        entry_type = Log::EntryType.new(type_byte)
-        data_len = io.read_bytes(UInt32, FORMAT).to_i
+    # Zero-copy: slices directly into the payload buffer.
+    private def self.read_bytes_field(buf : Bytes, io : IO::Memory) : Bytes
+      pos = io.pos
+      len = FORMAT.decode(UInt32, buf[pos, 4]).to_i
+      io.pos += 4
+      return Bytes.empty if len == 0
+      data_pos = io.pos
+      io.pos += len
+      buf[data_pos, len]
+    end
+
+    # Zero-copy entries with direct header reads from the buffer.
+    private def self.read_entries(buf : Bytes, io : IO::Memory) : Array(Log::Entry)
+      pos = io.pos
+      count = FORMAT.decode(UInt32, buf[pos, 4]).to_i
+      io.pos += 4
+      Array(Log::Entry).new(count) do
+        hdr = buf[io.pos, ENTRY_HEADER_SIZE]
+        io.pos += ENTRY_HEADER_SIZE
+        index = FORMAT.decode(UInt64, hdr[0, 8])
+        term = FORMAT.decode(UInt64, hdr[8, 8])
+        entry_type = Log::EntryType.new(hdr[16])
+        data_len = FORMAT.decode(UInt32, hdr[17, 4]).to_i
         data = if data_len > 0
-                 pos = io.pos
+                 data_pos = io.pos
                  io.pos += data_len
-                 buf[pos, data_len]
+                 buf[data_pos, data_len]
                else
                  Bytes.empty
                end
