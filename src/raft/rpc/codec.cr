@@ -37,6 +37,10 @@ module Raft::RPC
       io.to_slice
     end
 
+    # Shared decode payload buffer — reused across calls, only grows when
+    # a larger message arrives. Eliminates per-decode Bytes allocation.
+    @@decode_payload = Bytes.new(512)
+
     # Reads a TLV frame from *io* and returns the decoded RPC message.
     #
     # Raises `Raft::Error` on unexpected EOF or unknown type tag.
@@ -44,10 +48,13 @@ module Raft::RPC
       tag_byte = io.read_byte
       raise Raft::Error.new("Unexpected EOF reading type tag") unless tag_byte
       type = Type.new(tag_byte)
-      length = io.read_bytes(UInt32, FORMAT)
-      payload = Bytes.new(length)
-      io.read_fully(payload) if length > 0
-      decode_payload(type, IO::Memory.new(payload, writeable: false))
+      length = io.read_bytes(UInt32, FORMAT).to_i
+      if length > @@decode_payload.size
+        @@decode_payload = Bytes.new(Math.max(length, @@decode_payload.size * 2))
+      end
+      buf = @@decode_payload[0, length]
+      io.read_fully(buf) if length > 0
+      decode_payload(type, IO::Memory.new(buf, writeable: false))
     end
 
     # --- Encode helpers ---
