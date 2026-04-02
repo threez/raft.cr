@@ -11,6 +11,8 @@ A Crystal implementation of the [Raft consensus algorithm](https://raft.github.i
 - **Pluggable state machine** -- implement three methods to replicate any application state
 - **Snapshots** -- multi-chunk transfer for lagging followers
 - **Dynamic membership** -- add/remove voters, learner (non-voting) members with safe promotion
+- **RTT auto-tuning** -- leader measures round-trip time, distributes optimal heartbeat/election timeouts cluster-wide
+- **Active-passive mode** -- optional quorum=1 for 2-node clusters (availability over consistency)
 - **Metrics** -- elections, proposals, commits, term, and role observable via `node.metrics`
 - **Deterministic testing** -- all non-determinism is injected; full cluster tests run in-process
 
@@ -96,6 +98,32 @@ node.promote_learner("new-node")
 node.remove_peer("old-node")
 ```
 
+### RTT Auto-Tuning
+
+When enabled, the leader periodically measures round-trip time to all peers via `Ping`/`Pong` probes and automatically adjusts heartbeat and election timeouts following [etcd best practices](https://etcd.io/docs/v3.5/tuning/). The tuned values are distributed to all followers via `ConfigUpdate` RPCs, ensuring cluster-wide consistency.
+
+```crystal
+config = Raft::Config.new(
+  rtt_tuning: true,          # enable auto-tuning
+  rtt_probe_interval: 60,    # probe every 60 seconds (default)
+)
+```
+
+Tuning formula:
+- Heartbeat interval = 1.5x median RTT (clamped to 10ms–5000ms)
+- Election timeout min = 10x median RTT
+- Election timeout max = 20x median RTT
+
+### Active-Passive Mode
+
+For 2-node clusters, standard Raft requires both nodes for quorum — if one fails, the cluster is unavailable. Active-passive mode lowers quorum to 1, allowing either node to operate independently.
+
+```crystal
+config = Raft::Config.new(active_passive: true)
+```
+
+**Trade-off**: During a network partition, both nodes may accept writes. When the partition heals, the node with the lower term loses its divergent entries. Use only when availability is more important than strict consistency.
+
 ## Example: Distributed KV Store
 
 A complete 3-node KV store with an HTTP API lives in [`examples/kv_store/`](examples/kv_store/).
@@ -156,7 +184,8 @@ See the [design documentation](doc/) for details:
 | `Raft::Log::File` | File-backed log with crash recovery |
 | `Raft::Transport::TCP` | TCP transport with TLV + HMAC-SHA256 |
 | `Raft::Transport::InMemory` | In-process transport for testing (with partition simulation) |
-| `Raft::Config` | Election timeouts, heartbeat interval, cookie, chunk size |
+| `Raft::RTTMonitor` | Leader-driven RTT measurement and timeout auto-tuning |
+| `Raft::Config` | Election timeouts, heartbeat interval, cookie, RTT tuning, active-passive |
 | `Raft::Metrics` | Observable counters -- access via `node.metrics` |
 
 Full API documentation: `crystal docs`

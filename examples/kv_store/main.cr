@@ -33,7 +33,7 @@ end
 
 # Create data directory
 data_dir = "./data/#{node_id}"
-Dir.mkdir_p(data_dir) unless Dir.exists?(data_dir)
+Dir.mkdir_p(data_dir)
 
 # Configure and create the Raft node
 config = Raft::Config.new(
@@ -41,7 +41,9 @@ config = Raft::Config.new(
   election_timeout_min: 150,
   election_timeout_max: 300,
   heartbeat_interval: 50,
-  snapshot_threshold: 10,
+  snapshot_threshold: 1000,
+  rtt_tuning: true,
+  rtt_probe_interval: 30,
 )
 
 transport = Raft::Transport::TCP.new(
