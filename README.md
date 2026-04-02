@@ -10,7 +10,7 @@ A Crystal implementation of the [Raft consensus algorithm](https://raft.github.i
 - **Pluggable storage** -- in-memory or file-backed with crash recovery and log compaction
 - **Pluggable state machine** -- implement three methods to replicate any application state
 - **Snapshots** -- multi-chunk transfer for lagging followers
-- **Dynamic membership** -- add and remove peers at runtime
+- **Dynamic membership** -- add/remove voters, learner (non-voting) members with safe promotion
 - **Metrics** -- elections, proposals, commits, term, and role observable via `node.metrics`
 - **Deterministic testing** -- all non-determinism is injected; full cluster tests run in-process
 
@@ -70,8 +70,30 @@ result = node.propose("SET key value".to_slice)
 # 4. Linearizable read (confirms leadership, then reads locally)
 value = node.read("GET key".to_slice)
 
-# 5. Shut down
+# 5. Membership changes
+node.add_peer("node-4")           # add a voting member
+node.add_learner("node-5")        # add a non-voting learner
+node.promote_learner("node-5")    # promote to voter once caught up
+node.remove_peer("node-4")        # remove a voter or learner
+
+# 6. Shut down
 node.stop
+```
+
+### Learner Nodes
+
+A learner is a non-voting member that receives log replication but does not participate in elections or quorum. This allows a new node to catch up on the log safely before becoming a voter -- avoiding the risk of reducing cluster availability during catch-up.
+
+```crystal
+# On the leader: add a learner
+node.add_learner("new-node")
+
+# The learner receives all log entries and snapshots via replication.
+# Once it has caught up, promote it to a full voting member:
+node.promote_learner("new-node")
+
+# Optionally remove an old member to maintain cluster size:
+node.remove_peer("old-node")
 ```
 
 ## Example: Distributed KV Store
@@ -97,10 +119,16 @@ curl localhost:8001/_status
 
 The example demonstrates TCP transport, file-backed persistence, HMAC authentication, HTTP API with automatic leader redirection (307), and a CLI client.
 
+To run a load test with [k6](https://k6.io/):
+
+```bash
+./examples/kv_store/bench.sh
+```
+
 ## Architecture
 
 ```
-Client API (propose / read / add_peer / stop)
+Client API (propose / read / add_peer / add_learner / promote_learner / stop)
         |
    Raft::Node  [Follower <-> Candidate <-> Leader]
         |
@@ -122,7 +150,7 @@ See the [design documentation](doc/) for details:
 
 | Class | Purpose |
 |-------|---------|
-| `Raft::Node` | Consensus node -- `start`, `stop`, `propose`, `read`, `add_peer`, `remove_peer` |
+| `Raft::Node` | Consensus node -- `start`, `stop`, `propose`, `read`, `add_peer`, `add_learner`, `promote_learner`, `remove_peer` |
 | `Raft::StateMachine` | Abstract -- implement `apply`, `snapshot`, `restore` |
 | `Raft::Log::InMemory` | In-memory log for testing |
 | `Raft::Log::File` | File-backed log with crash recovery |
@@ -137,12 +165,17 @@ Full API documentation: `crystal docs`
 
 ```bash
 make           # clean, format, lint, docs, spec
-make spec      # run tests (100 specs)
-make lint      # ameba linter
-make fmt       # crystal format
-make bench     # codec throughput, election latency, propose/sec
-make example   # build KV store server + client
-make docs      # generate API docs
+make spec          # run tests (~107 specs)
+make lint          # ameba linter
+make fmt           # crystal format
+make bench         # all benchmarks (codec, log, propose, cluster)
+make bench-codec   # RPC encode/decode/roundtrip for all message types
+make bench-log     # log append (InMemory + File)
+make bench-propose # propose path micro-benchmarks
+make bench-cluster # election latency + propose throughput
+make bench-mt      # all benchmarks with preview_mt (multi-threaded)
+make example       # build KV store server + client
+make docs          # generate API docs
 ```
 
 Requires Crystal >= 1.19.1.

@@ -6,7 +6,7 @@ module Raft::Node::Candidate
 
     reset_election_timer
 
-    @peers.each do |peer|
+    @voters.each do |peer|
       @transport.send(peer, RPC::PreVote.new(
         term: @current_term + 1, # speculative next term, don't actually increment
         candidate_id: @id,
@@ -48,7 +48,7 @@ module Raft::Node::Candidate
 
     reset_election_timer
 
-    @peers.each do |peer|
+    @voters.each do |peer|
       @transport.send(peer, RPC::RequestVote.new(
         term: @current_term,
         candidate_id: @id,
@@ -71,7 +71,7 @@ module Raft::Node::Candidate
   end
 
   private def quorum_size : Int32
-    (@peers.size + 1) // 2 + 1
+    (@voters.size + 1) // 2 + 1
   end
 
   private def check_election_won : Nil

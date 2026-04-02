@@ -8,7 +8,8 @@ module Raft::Node::Leader
     next_idx = @log.last_index + 1
     @next_index = Hash(String, UInt64).new
     @match_index = Hash(String, UInt64).new
-    @peers.each do |peer|
+    all_peers = @voters + @learners
+    all_peers.each do |peer|
       @next_index[peer] = next_idx
       @match_index[peer] = 0_u64
     end
@@ -80,9 +81,10 @@ module Raft::Node::Leader
   end
 
   private def advance_commit_index : Nil
-    # Collect match indices (leader implicitly matches its own last index)
-    sorted = Array(UInt64).new(@match_index.size + 1)
-    @match_index.each_value { |val| sorted << val }
+    # Collect match indices for voters only (learners don't count toward quorum).
+    # Leader implicitly matches its own last index.
+    sorted = Array(UInt64).new(@voters.size + 1)
+    @voters.each { |voter| sorted << (@match_index[voter]? || 0_u64) }
     sorted << @log.last_index # self
     sorted.sort!
 
@@ -118,7 +120,7 @@ module Raft::Node::Leader
   end
 
   private def start_replicators : Nil
-    @peers.each do |peer|
+    (@voters + @learners).each do |peer|
       next if @replicators.has_key?(peer)
       replicator = Replicator.new(
         peer_id: peer,
@@ -147,8 +149,10 @@ module Raft::Node::Leader
   private def update_replicators_for_config : Nil
     return unless @role.leader?
 
+    all_peers = @voters + @learners
+
     # Stop replicators for removed peers
-    removed = @replicators.keys - @peers
+    removed = @replicators.keys - all_peers
     removed.each do |peer_id|
       @replicators[peer_id]?.try(&.stop)
       @replicators.delete(peer_id)
@@ -158,7 +162,7 @@ module Raft::Node::Leader
 
     # Start replicators for new peers
     next_idx = @log.last_index + 1
-    @peers.each do |peer|
+    all_peers.each do |peer|
       unless @replicators.has_key?(peer)
         @next_index[peer] = next_idx
         @match_index[peer] = 0_u64

@@ -42,12 +42,25 @@ class Raft::Node
     @leader_id
   end
 
+  # Returns the list of learner (non-voting) node IDs.
+  def learners : Array(String)
+    @learners
+  end
+
+  # Returns all peer IDs (voters + learners).
+  def peers : Array(String)
+    @voters + @learners
+  end
+
   @voted_for : String?
   @leader_id : String?
   @snapshot_buffer : IO::Memory?
 
-  def initialize(@id : String, @peers : Array(String), @state_machine : StateMachine,
-                 @transport : Transport, @log : Raft::Log, @config : Config = Config.new)
+  def initialize(@id : String, peers : Array(String), @state_machine : StateMachine,
+                 @transport : Transport, @log : Raft::Log, @config : Config = Config.new,
+                 learners : Array(String) = [] of String)
+    @voters = peers
+    @learners = learners
     @role = Role::Follower
     @current_term = 0_u64
     @voted_for = nil
@@ -165,7 +178,7 @@ class Raft::Node
     @state_machine.apply(command)
   end
 
-  # Adds a new peer to the cluster.
+  # Adds a new voting peer to the cluster.
   #
   # Appends a `Config` log entry with the updated peer list. The change
   # is applied immediately on the leader and replicated to followers.
@@ -176,23 +189,46 @@ class Raft::Node
   def add_peer(peer_id : String) : Nil
     raise Error::Shutdown.new("Node is shut down") unless @running
     raise Error::NotLeader.new(@leader_id) unless @role.leader?
-    raise Error::ConfigChange.new("Peer #{peer_id} already exists") if @peers.includes?(peer_id)
+    raise Error::ConfigChange.new("Peer #{peer_id} already exists") if @voters.includes?(peer_id) || @learners.includes?(peer_id)
 
-    new_peers = @peers + [peer_id]
-    data = encode_peers(new_peers)
-    entry = Raft::Log::Entry.new(
-      index: @log.last_index + 1,
-      term: @current_term,
-      entry_type: Raft::Log::EntryType::Config,
-      data: data,
-    )
-    @log.append(entry)
-    # Apply immediately on leader (peers update before commit for single-server changes)
-    apply_config(new_peers)
+    new_voters = @voters + [peer_id]
+    append_config_entry(new_voters, @learners)
     notify_replicators
   end
 
-  # Removes a peer from the cluster.
+  # Adds a new non-voting learner to the cluster.
+  #
+  # The learner receives log replication and snapshots but does not
+  # participate in elections or quorum. Use `promote_learner` to
+  # convert to a voting member once caught up.
+  #
+  # Raises `Error::ConfigChange` if the peer already exists.
+  # Raises `Error::NotLeader` if this node is not the leader.
+  def add_learner(peer_id : String) : Nil
+    raise Error::Shutdown.new("Node is shut down") unless @running
+    raise Error::NotLeader.new(@leader_id) unless @role.leader?
+    raise Error::ConfigChange.new("Peer #{peer_id} already exists") if @voters.includes?(peer_id) || @learners.includes?(peer_id)
+
+    new_learners = @learners + [peer_id]
+    append_config_entry(@voters, new_learners)
+    notify_replicators
+  end
+
+  # Promotes a learner to a voting member.
+  #
+  # Raises `Error::ConfigChange` if the peer is not a learner.
+  # Raises `Error::NotLeader` if this node is not the leader.
+  def promote_learner(peer_id : String) : Nil
+    raise Error::Shutdown.new("Node is shut down") unless @running
+    raise Error::NotLeader.new(@leader_id) unless @role.leader?
+    raise Error::ConfigChange.new("Peer #{peer_id} is not a learner") unless @learners.includes?(peer_id)
+
+    new_voters = @voters + [peer_id]
+    new_learners = @learners.reject { |pid| pid == peer_id }
+    append_config_entry(new_voters, new_learners)
+  end
+
+  # Removes a peer (voter or learner) from the cluster.
   #
   # Appends a `Config` log entry with the updated peer list. Must be
   # called on the leader node.
@@ -202,18 +238,13 @@ class Raft::Node
   def remove_peer(peer_id : String) : Nil
     raise Error::Shutdown.new("Node is shut down") unless @running
     raise Error::NotLeader.new(@leader_id) unless @role.leader?
-    raise Error::ConfigChange.new("Peer #{peer_id} not found") unless @peers.includes?(peer_id)
+    unless @voters.includes?(peer_id) || @learners.includes?(peer_id)
+      raise Error::ConfigChange.new("Peer #{peer_id} not found")
+    end
 
-    new_peers = @peers.reject { |pid| pid == peer_id }
-    data = encode_peers(new_peers)
-    entry = Raft::Log::Entry.new(
-      index: @log.last_index + 1,
-      term: @current_term,
-      entry_type: Raft::Log::EntryType::Config,
-      data: data,
-    )
-    @log.append(entry)
-    apply_config(new_peers)
+    new_voters = @voters.reject { |pid| pid == peer_id }
+    new_learners = @learners.reject { |pid| pid == peer_id }
+    append_config_entry(new_voters, new_learners)
     notify_replicators
   end
 
@@ -354,8 +385,8 @@ class Raft::Node
         resolve_pending(entry.index, Bytes.empty) if @role.leader?
       elsif entry.entry_type.config?
         flush_apply_batch
-        new_peers = decode_peers(entry.data)
-        apply_config(new_peers) unless @role.leader? # leader already applied on propose
+        voters, learners = decode_config(entry.data)
+        apply_config(voters, learners) unless @role.leader? # leader already applied on propose
       end
     end
 
@@ -378,24 +409,58 @@ class Raft::Node
     @apply_buf_commands.clear
   end
 
-  private def apply_config(new_peers : Array(String)) : Nil
-    @peers = new_peers
-    LOGGER.info { "Node #{@id} config updated: peers=#{@peers}" }
+  private def apply_config(new_voters : Array(String), new_learners : Array(String)) : Nil
+    @voters = new_voters
+    @learners = new_learners
+    LOGGER.info { "Node #{@id} config updated: voters=#{@voters} learners=#{@learners}" }
     update_replicators_for_config if @role.leader?
   end
 
-  private def encode_peers(peers : Array(String)) : Bytes
+  private def append_config_entry(new_voters : Array(String), new_learners : Array(String)) : Nil
+    data = encode_config(new_voters, new_learners)
+    entry = Raft::Log::Entry.new(
+      index: @log.last_index + 1,
+      term: @current_term,
+      entry_type: Raft::Log::EntryType::Config,
+      data: data,
+    )
+    @log.append(entry)
+    apply_config(new_voters, new_learners)
+  end
+
+  private def encode_config(voters : Array(String), learners : Array(String)) : Bytes
     io = IO::Memory.new
-    io.write_bytes(peers.size.to_u32, IO::ByteFormat::BigEndian)
-    peers.each do |peer_id|
-      io.write_bytes(peer_id.bytesize.to_u16, IO::ByteFormat::BigEndian)
-      io.write(peer_id.to_slice)
-    end
+    io.write_byte(1_u8) # version 1: voters + learners
+    encode_string_list(io, voters)
+    encode_string_list(io, learners)
     io.to_slice
   end
 
-  private def decode_peers(data : Bytes) : Array(String)
-    io = IO::Memory.new(data)
+  private def decode_config(data : Bytes) : {Array(String), Array(String)}
+    io = IO::Memory.new(data, writeable: false)
+    first_byte = io.read_byte || 0_u8
+    if first_byte == 1_u8
+      # Version 1: voters + learners
+      voters = decode_string_list(io)
+      learners = decode_string_list(io)
+      {voters, learners}
+    else
+      # Legacy format (version 0): first_byte is part of u32 count, all entries are voters
+      io.pos = 0
+      voters = decode_string_list(io)
+      {voters, [] of String}
+    end
+  end
+
+  private def encode_string_list(io : IO, list : Array(String)) : Nil
+    io.write_bytes(list.size.to_u32, IO::ByteFormat::BigEndian)
+    list.each do |str|
+      io.write_bytes(str.bytesize.to_u16, IO::ByteFormat::BigEndian)
+      io.write(str.to_slice)
+    end
+  end
+
+  private def decode_string_list(io : IO) : Array(String)
     count = io.read_bytes(UInt32, IO::ByteFormat::BigEndian)
     Array(String).new(count.to_i) do
       len = io.read_bytes(UInt16, IO::ByteFormat::BigEndian)
@@ -425,7 +490,8 @@ class Raft::Node
     case tick.kind
     when .election?
       return unless tick.epoch == @election_epoch
-      start_pre_vote if @role.follower? || @role.candidate?
+      # Learners must not participate in elections
+      start_pre_vote if (@role.follower? || @role.candidate?) && !@learners.includes?(@id)
     when .heartbeat?
       notify_replicators if @role.leader?
     end
