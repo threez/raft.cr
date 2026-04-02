@@ -1,4 +1,4 @@
-.PHONY: all clean fmt lint docs spec bench bench-mt bench-codec bench-log bench-cluster example
+.PHONY: all clean fmt lint docs spec bench bench-mt bench-codec bench-log bench-propose bench-cluster example
 
 all: clean fmt lint docs spec
 
@@ -25,6 +25,9 @@ bench-codec:
 
 bench-log:
 	crystal run bench/log_bench.cr --release
+
+bench-propose:
+	crystal run bench/propose_bench.cr --release
 
 bench-cluster:
 	crystal run bench/cluster_bench.cr --release
