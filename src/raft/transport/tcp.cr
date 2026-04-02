@@ -9,10 +9,14 @@ require "socket"
 class Raft::Transport::TCP < Raft::Transport
   @inbox : Channel(RPC::Envelope)?
 
+  # :nodoc:
+  SEND_BUFFER_SIZE = 256
+
   def initialize(@bind_address : String, @port : Int32,
                  @peer_addresses : Hash(String, {String, Int32}),
                  @cookie : String)
     @connections = Hash(String, TCPSocket).new
+    @send_channels = Hash(String, Channel(Bytes)).new
     @connection_mutex = Mutex.new
     @server = nil.as(TCPServer?)
     @running = false
@@ -37,20 +41,23 @@ class Raft::Transport::TCP < Raft::Transport
 
   def send(peer_id : String, message : RPC::Message) : Nil
     return unless @running
-    socket = get_or_connect(peer_id)
-    return unless socket
-    begin
-      RPC::Codec.encode(message, socket)
-      socket.flush
-    rescue ex : IO::Error
-      close_connection(peer_id)
+    ch = @send_channels[peer_id]?
+    unless ch
+      get_or_connect(peer_id)
+      ch = @send_channels[peer_id]?
     end
+    return unless ch
+    # Encode using the shared codec (mutex protected) — frame is a fresh Bytes
+    frame = RPC::Codec.encode(message)
+    ch.send(frame)
   end
 
   def stop : Nil
     @running = false
     @server.try(&.close)
     @connection_mutex.synchronize do
+      @send_channels.each_value(&.close)
+      @send_channels.clear
       @connections.each_value do |sock|
         sock.close rescue nil
       end
@@ -100,6 +107,7 @@ class Raft::Transport::TCP < Raft::Transport
       if socket = @connections[peer_id]?
         return socket unless socket.closed?
         @connections.delete(peer_id)
+        @send_channels.delete(peer_id).try(&.close)
       end
 
       return nil if should_back_off?(peer_id)
@@ -112,6 +120,9 @@ class Raft::Transport::TCP < Raft::Transport
         socket.tcp_nodelay = true
         Handshake.initiate(socket, @cookie)
         @connections[peer_id] = socket
+        ch = Channel(Bytes).new(SEND_BUFFER_SIZE)
+        @send_channels[peer_id] = ch
+        spawn_sender(peer_id, socket, ch)
         reset_backoff(peer_id)
         socket
       rescue
@@ -123,9 +134,23 @@ class Raft::Transport::TCP < Raft::Transport
 
   private def close_connection(peer_id : String) : Nil
     @connection_mutex.synchronize do
+      @send_channels.delete(peer_id).try(&.close)
       if socket = @connections.delete(peer_id)
         socket.close rescue nil
       end
+    end
+  end
+
+  private def spawn_sender(peer_id : String, socket : TCPSocket, ch : Channel(Bytes)) : Nil
+    spawn(name: "tcp-sender-#{peer_id}") do
+      loop do
+        frame = ch.receive
+        socket.write(frame)
+        socket.flush
+      end
+    rescue Channel::ClosedError
+    rescue IO::Error
+      close_connection(peer_id)
     end
   end
 
