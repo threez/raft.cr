@@ -18,6 +18,9 @@
 # log = Raft::Log::File.new("/var/lib/raft/node-1", fsync: false) # page-cache only
 # ```
 class Raft::Log::File < Raft::Log
+  # Opens (or creates) a log in *data_dir*.
+  #
+  # See the class-level documentation for the file format and the *fsync* trade-off.
   def initialize(data_dir : String, fsync : Bool = true)
     Dir.mkdir_p(data_dir)
     @log_store = LogStore.new(::File.join(data_dir, "log.bin"), data_dir, fsync)

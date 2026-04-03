@@ -12,6 +12,12 @@ class Raft::Transport::TCP < Raft::Transport
   # :nodoc:
   SEND_BUFFER_SIZE = 256
 
+  # Creates a new TCP transport.
+  #
+  # - *bind_address* — local address to listen on (e.g. `"0.0.0.0"`)
+  # - *port* — local port to listen on; pass `0` for OS-assigned (see `#actual_port`)
+  # - *peer_addresses* — map of peer ID → `{host, port}` for outbound connections
+  # - *cookie* — pre-shared key for HMAC-SHA256 mutual authentication; must match all peers
   def initialize(@bind_address : String, @port : Int32,
                  @peer_addresses : Hash(String, {String, Int32}),
                  @cookie : String)

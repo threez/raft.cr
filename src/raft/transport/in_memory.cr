@@ -9,6 +9,7 @@ class Raft::Transport::InMemory < Raft::Transport
   @@registry = Hash(String, Channel(RPC::Envelope)).new
   @@partitions = Set({String, String}).new
 
+  # Creates an in-memory transport registered under *node_id*.
   def initialize(@node_id : String)
   end
 

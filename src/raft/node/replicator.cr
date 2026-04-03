@@ -22,17 +22,23 @@ class Raft::Node::Replicator
     @running = false
   end
 
+  # Starts the replication fiber for this peer.
   def start : Nil
     @running = true
     spawn(name: "replicator-#{@peer_id}") { run }
   end
 
+  # Stops the replication fiber, closing notification channels.
   def stop : Nil
     @running = false
     @notify_channel.close
     @ack_channel.close
   end
 
+  # Signals the replicator that new entries are available to send.
+  #
+  # Non-blocking — drops the signal if the channel is already full
+  # (the pending notification is sufficient).
   def notify : Nil
     select
     when @notify_channel.send(nil)

@@ -55,6 +55,11 @@ module Raft
     # Interval in seconds between RTT measurement probes. Default: 60.
     property rtt_probe_interval : Int32
 
+    # Creates a `Config` with all fields set to their defaults.
+    #
+    # All parameters are keyword arguments matching the property names.
+    # Defaults are appropriate for local clusters; adjust timeouts based on
+    # your network RTT (or enable `rtt_tuning` for automatic tuning).
     def initialize(
       @election_timeout_min : Int32 = 150,
       @election_timeout_max : Int32 = 300,

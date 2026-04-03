@@ -57,6 +57,18 @@ class Raft::Node
   @snapshot_buffer : IO::Memory?
   @rtt_monitor : RTTMonitor?
 
+  # Creates a new Raft node.
+  #
+  # - *id* — unique identifier for this node within the cluster (e.g. `"node-1"`)
+  # - *peers* — IDs of the other **voting** nodes (not including self)
+  # - *state_machine* — application logic; see `StateMachine`
+  # - *transport* — network layer; use `Transport::InMemory` for tests, `Transport::TCP` for production
+  # - *log* — replicated log storage; use `Log::InMemory` for tests, `Log::File` for production
+  # - *config* — tuning parameters; sensible defaults are provided (see `Config`)
+  # - *learners* — IDs of non-voting observer nodes (optional, default empty)
+  #
+  # Restores state from a prior snapshot and replays any uncommitted log entries
+  # so the node is immediately consistent on restart.
   def initialize(@id : String, peers : Array(String), @state_machine : StateMachine,
                  @transport : Transport, @log : Raft::Log, @config : Config = Config.new,
                  learners : Array(String) = [] of String)
