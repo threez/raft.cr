@@ -10,9 +10,9 @@ request_vote_response = Raft::RPC::RequestVoteResponse.new(
 )
 append_entries = Raft::RPC::AppendEntries.new(
   term: 5_u64, leader_id: "leader", prev_log_index: 99_u64, prev_log_term: 4_u64,
-  entries: (1..10).map { |idx|
+  entries: (1..10).map do |idx|
     Raft::Log::Entry.new(index: idx.to_u64, term: 5_u64, entry_type: Raft::Log::EntryType::Op, data: "command-#{idx}".to_slice)
-  },
+  end,
   leader_commit: 95_u64,
 )
 append_entries_empty = Raft::RPC::AppendEntries.new(

@@ -455,10 +455,10 @@ class Raft::Node
     @config.heartbeat_interval = msg.heartbeat_interval
     @config.election_timeout_min = msg.election_timeout_min
     @config.election_timeout_max = msg.election_timeout_max
-    LOGGER.info {
+    LOGGER.info do
       "Node #{@id} RTT config received: heartbeat=#{msg.heartbeat_interval}ms " \
       "election=#{msg.election_timeout_min}-#{msg.election_timeout_max}ms"
-    }
+    end
   end
 
   private def apply_config(new_voters : Array(String), new_learners : Array(String)) : Nil

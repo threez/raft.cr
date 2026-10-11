@@ -126,10 +126,10 @@ class Raft::RTTMonitor
       @config.heartbeat_interval = heartbeat
       @config.election_timeout_min = election_min
       @config.election_timeout_max = election_max
-      LOGGER.info {
+      LOGGER.info do
         "Tuned timeouts: median_rtt=#{median_rtt.round(1)}ms " \
         "heartbeat=#{heartbeat}ms election=#{election_min}-#{election_max}ms"
-      }
+      end
 
       # Distribute to all peers
       update = RPC::ConfigUpdate.new(
