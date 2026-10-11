@@ -74,8 +74,8 @@ api.start(info[:http_port])
 
 # Wait for shutdown signal
 shutdown = Channel(Nil).new
-Signal::INT.trap { shutdown.send(nil) }
-Signal::TERM.trap { shutdown.send(nil) }
+Process.on_terminate { shutdown.send(nil) }
+Process.on_terminate { shutdown.send(nil) }
 
 puts "Press Ctrl+C to stop"
 shutdown.receive

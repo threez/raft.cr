@@ -137,13 +137,13 @@ class Raft::Log::File < Raft::Log
 
     def get(index : UInt64) : Entry?
       offset = @offsets[index]?
-      return nil unless offset
+      return unless offset
       read_entry_at(offset)
     end
 
     def term_at(index : UInt64) : UInt64?
       offset = @offsets[index]?
-      return nil unless offset
+      return unless offset
       read_term_at_offset(offset)
     end
 
@@ -409,7 +409,7 @@ class Raft::Log::File < Raft::Log
     end
 
     def load : {UInt64, UInt64, Bytes}?
-      return nil unless ::File.exists?(@path)
+      return unless ::File.exists?(@path)
       ::File.open(@path, "rb") do |file|
         last_idx = file.read_bytes(UInt64, FORMAT)
         last_trm = file.read_bytes(UInt64, FORMAT)

@@ -77,7 +77,7 @@ class Raft::Transport::TCP < Raft::Transport
       begin
         socket = server.accept
         spawn handle_inbound(socket, inbox)
-      rescue ex : IO::Error
+      rescue IO::Error
         break unless @running
       end
     end
@@ -91,9 +91,9 @@ class Raft::Transport::TCP < Raft::Transport
       msg = RPC::Codec.decode(socket)
       inbox.send(RPC::Envelope.new(from: peer_id, message: msg))
     end
-  rescue ex : Raft::Error::AuthenticationFailed
+  rescue Raft::Error::AuthenticationFailed
     socket.close rescue nil
-  rescue ex : IO::Error | Raft::Error
+  rescue IO::Error | Raft::Error
     socket.close rescue nil
   end
 
@@ -116,11 +116,11 @@ class Raft::Transport::TCP < Raft::Transport
         @send_channels.delete(peer_id).try(&.close)
       end
 
-      return nil if should_back_off?(peer_id)
+      return if should_back_off?(peer_id)
 
       begin
         addr = @peer_addresses[peer_id]?
-        return nil unless addr
+        return unless addr
         host, port = addr
         socket = TCPSocket.new(host, port, connect_timeout: 5.seconds)
         socket.tcp_nodelay = true

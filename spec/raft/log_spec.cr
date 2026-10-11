@@ -138,9 +138,9 @@ describe Raft::Log do
     it "replaces conflicting entries with different term" do
       log = Raft::Log::InMemory.new
       # Initial entries at term 1
-      log.append((1_u64..5_u64).map { |i|
+      log.append((1_u64..5_u64).map do |i|
         Raft::Log::Entry.new(index: i, term: 1_u64, entry_type: Raft::Log::EntryType::Op, data: "old#{i}".to_slice)
-      })
+      end)
 
       # New entries at term 2 starting from index 3
       log.append([

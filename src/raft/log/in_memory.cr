@@ -24,7 +24,7 @@ class Raft::Log::InMemory < Raft::Log
 
   def get(index : UInt64) : Entry?
     pos = index.to_i - 1
-    return nil if pos < 0 || pos >= @entries.size
+    return if pos < 0 || pos >= @entries.size
     @entries[pos]
   end
 

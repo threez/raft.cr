@@ -127,7 +127,7 @@ describe "Raft Integration" do
     10.times do |i|
       spawn { results.send(leader.propose("cmd-#{i}".to_slice)) }
     end
-    received = 10.times.map { results.receive }.to_a
+    received = Array.new(10) { results.receive }
     received.size.should eq(10)
     cluster.stop
   end
@@ -142,7 +142,7 @@ describe "Raft Integration" do
     n.times do |i|
       spawn { results.send(leader.propose("batch-#{i}".to_slice)) }
     end
-    received = n.times.map { results.receive }.to_a
+    received = Array.new(n) { results.receive }
 
     received.size.should eq(n)
     leader.metrics.proposals_committed.should eq(n.to_u64)
@@ -368,9 +368,9 @@ describe "Raft Integration" do
     result.should eq("after-remove".to_slice)
 
     # Verify the promoted learner received all entries
-    wait_until {
+    wait_until do
       learner_sm.applied.any? { |cmd| cmd == "after-remove".to_slice }
-    }.should be_true
+    end.should be_true
 
     # Phase 6: Partition the other original non-leader voter.
     # Only leader + promoted learner remain reachable.
@@ -383,9 +383,9 @@ describe "Raft Integration" do
     result = leader.propose("quorum-with-learner".to_slice)
     result.should eq("quorum-with-learner".to_slice)
 
-    wait_until {
+    wait_until do
       learner_sm.applied.any? { |cmd| cmd == "quorum-with-learner".to_slice }
-    }.should be_true
+    end.should be_true
 
     # Cleanup
     Raft::Transport::InMemory.heal(leader_id, remaining_id)
@@ -514,10 +514,10 @@ describe "Raft Integration" do
       Raft::Transport::InMemory.heal("ap-1", "ap-2")
 
       # Wait for one to step down (higher term wins)
-      wait_until {
+      wait_until do
         leaders = [node1, node2].count(&.role.leader?)
         leaders == 1
-      }.should be_true
+      end.should be_true
 
       # The surviving leader can still propose
       surviving_leader = node1.role.leader? ? node1 : node2
